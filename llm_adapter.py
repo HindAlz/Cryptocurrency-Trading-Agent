@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
+from decimal import Decimal
 
 # ---------------------------------------------------------------------------
 # Errors — callers must handle these, never ignore them
@@ -35,6 +36,48 @@ GUARDIAN_DECISIONS = {"APPROVE", "MODIFY", "BLOCK", "ESCALATE"}
 TRADER_FIELDS = {"symbol", "action", "quantity", "reasoning"}
 GUARDIAN_FIELDS = {"decision", "reason", "risk_score", "modified_quantity", "rules_triggered"}
 
+TRADER_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "symbol": {"type": "string"},
+        "action": {
+            "type": "string",
+            "enum": ["BUY", "SELL", "HOLD"]
+        },
+        "quantity": {"type": "number"},
+        "reasoning": {"type": "string"}
+    },
+    "required": ["symbol", "action", "quantity", "reasoning"]
+}
+
+GUARDIAN_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "decision": {
+            "type": "string",
+            "enum": ["APPROVE", "MODIFY", "BLOCK", "ESCALATE"]
+        },
+        "reason": {"type": "string"},
+        "risk_score": {"type": "number"},
+        "modified_quantity": {
+            "type": ["number", "null"]
+        },
+        "rules_triggered": {
+            "type": "array",
+            "items": {"type": "string"}
+        }
+    },
+    "required": [
+        "decision",
+        "reason",
+        "risk_score",
+        "modified_quantity",
+        "rules_triggered"
+    ]
+}
+
 
 @dataclass(frozen=True)
 class TraderDecision:
@@ -59,7 +102,7 @@ class GuardianDecision:
 
 @dataclass
 class ModelConfig:
-    provider: str = "mock"  # "mock" for offline dev, "meta" for Muse, "gemini" for Gemini
+    provider: str = "gemini"  # "mock" for offline dev, "meta" for Muse, "gemini" for Gemini
     model: str = "muse-spark-1.3"
     base_url: str = "https://api.meta.ai/v1"
     timeout_seconds: float = 30.0
@@ -107,8 +150,16 @@ def create_adapter(config_path: str | Path | None = None,
     """Build an adapter. ``provider='mock'`` overrides the config file."""
     if config_path is None:
         here = Path(__file__).resolve().parent
-        candidate = here / "config.json"
-        config = ModelConfig.from_file(candidate) if candidate.exists() else ModelConfig()
+        candidate = here / "config.llm.local.json"
+        if candidate.exists():
+            config = ModelConfig.from_file(candidate)
+        elif provider == "mock":
+            config = ModelConfig(provider="mock")
+        else:
+            raise FileNotFoundError(
+                "Model configuration is missing. Supply a configuration path. "
+                "Mock mode must be selected explicitly for offline tests."
+            )
     else:
         config = ModelConfig.from_file(config_path)
     if provider is not None:
@@ -157,7 +208,7 @@ def validate_trader_response(obj: Any) -> TraderDecision:
     symbol = symbol.strip().upper()
 
     action = obj["action"]
-    if action not in TRADER_ACTIONS:
+    if not isinstance(action, str) or action not in TRADER_ACTIONS:
         raise LLMValidationError(f"TraderDecision: 'action' must be one of {sorted(TRADER_ACTIONS)}, got {action!r}.")
 
     quantity = obj["quantity"]
@@ -177,7 +228,7 @@ def validate_guardian_response(obj: Any) -> GuardianDecision:
     obj = _check_exact_fields(obj, GUARDIAN_FIELDS, "GuardianDecision")
 
     decision = obj["decision"]
-    if decision not in GUARDIAN_DECISIONS:
+    if not isinstance(decision, str) or decision not in GUARDIAN_DECISIONS:
         raise LLMValidationError(
             f"GuardianDecision: 'decision' must be one of {sorted(GUARDIAN_DECISIONS)}, got {decision!r}.")
 
@@ -185,10 +236,12 @@ def validate_guardian_response(obj: Any) -> GuardianDecision:
     if not _is_number(risk) or not (0 <= float(risk) <= 100):
         raise LLMValidationError("GuardianDecision: 'risk_score' must be a number between 0 and 100.")
     risk = float(risk)
-    # At most one decimal place, e.g. 72.5 — not 72.53.
-    if abs(risk * 10 - round(risk * 10)) > 1e-9:
-        raise LLMValidationError("GuardianDecision: 'risk_score' must have at most one decimal place.")
-
+    risk_decimal = Decimal(str(risk))
+    if risk_decimal != risk_decimal.quantize(Decimal("0.01")):
+        raise LLMValidationError(
+            "GuardianDecision: risk_score must have at most two decimal places."
+        )
+    
     modified = obj["modified_quantity"]
     if decision == "MODIFY":
         if modified is None or not _is_number(modified) or float(modified) <= 0:
@@ -202,35 +255,60 @@ def validate_guardian_response(obj: Any) -> GuardianDecision:
         modified = None
 
     rules = obj["rules_triggered"]
-    if not isinstance(rules, list) or any(not isinstance(r, str) or not r.strip() for r in rules):
-        raise LLMValidationError("GuardianDecision: 'rules_triggered' must be a list of non-empty strings.")
+
+    if not isinstance(rules, list):
+        raise LLMValidationError(
+            "GuardianDecision: rules_triggered must be a list."
+        )
+
+    if len(rules) > 100:
+        raise LLMValidationError(
+            "GuardianDecision: at most 100 triggered rules are allowed."
+        )
+
+    validated_rules = []
+
+    for rule in rules:
+        if not isinstance(rule, str) or not rule.strip():
+            raise LLMValidationError(
+                "GuardianDecision: each rule must be a non-empty string."
+            )
+
+        rule = rule.strip()
+
+        if len(rule.encode("utf-8")) > 255:
+            raise LLMValidationError(
+                "GuardianDecision: each rule must be at most 255 UTF-8 bytes."
+            )
+
+        validated_rules.append(rule)
 
     return GuardianDecision(decision=decision, reason=_check_reasoning(obj["reason"], "GuardianDecision"),
                             risk_score=risk, modified_quantity=modified,
-                            rules_triggered=[r.strip() for r in rules])
+                            rules_triggered=validated_rules)
 
 
 def _extract_json(text: Any) -> dict:
-    """Pull one JSON object out of model text (tolerates a ```json fence)."""
-    if text is None or (isinstance(text, str) and not text.strip()):
-        raise LLMValidationError("Model returned empty output.")
-    if not isinstance(text, str):
-        raise LLMValidationError(f"Model returned non-text output: {type(text).__name__}")
-    cleaned = text.strip()
-    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
-    if fence:
-        cleaned = fence.group(1)
-    else:
-        start, end = cleaned.find("{"), cleaned.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            raise LLMValidationError(f"Model output contained no JSON object. Raw output (truncated): {cleaned[:200]!r}")
-        cleaned = cleaned[start:end + 1]
+    if not isinstance(text, str) or not text.strip():
+        raise LLMValidationError("Model returned empty or non-text output.")
+
+    def reject_constant(value):
+        raise ValueError(f"Invalid JSON numeric constant: {value}")
+
     try:
-        parsed = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        raise LLMValidationError(f"Model output was not valid JSON: {exc}. Raw (truncated): {cleaned[:200]!r}") from exc
+        parsed = json.loads(
+            text,
+            parse_constant=reject_constant
+        )
+    except ValueError as exc:
+        raise LLMValidationError(
+            "Model output must be one valid JSON object, "
+            "without markdown or surrounding text."
+        ) from exc
+
     if not isinstance(parsed, dict):
-        raise LLMValidationError("Model output JSON was not an object.")
+        raise LLMValidationError("Model output must be a JSON object.")
+
     return parsed
 
 
@@ -253,7 +331,9 @@ class ModelAdapter:
     """Safe interface to the LLM for the Trader and the Guardian."""
 
     def __init__(self, config: ModelConfig | None = None):
-        self.config = config or ModelConfig()
+        if config is None:
+            raise ValueError("Pass an explicit ModelConfig.")
+        self.config = config
         if self.config.provider not in ("mock", "meta", "gemini"):
             raise ValueError(f"Unknown provider {self.config.provider!r}. Use 'mock', 'meta' or 'gemini'.")
         self._prompts_dir = Path(__file__).resolve().parent / "prompts"
@@ -276,8 +356,18 @@ class ModelAdapter:
         )
 
     def _user_payload(self, context: Any) -> str:
-        if not isinstance(context, dict):
-            raise ValueError("context must be a dict (agreed with Members 2 and 3).")
+        try:
+            payload = json.dumps(
+                context,
+                sort_keys=True,
+                indent=2,
+                allow_nan=False
+            )
+        except (TypeError, ValueError) as exc:
+            raise LLMValidationError(
+                "Context must contain only valid JSON values "
+                "with finite numbers."
+            ) from exc
         payload = json.dumps(context, sort_keys=True, indent=2, default=str)
         _assert_no_secrets(payload)
         if len(payload) > 20000:
@@ -320,11 +410,11 @@ class ModelAdapter:
                 "reasoning": "Mock mode: HOLD for offline testing. No live model call was made."
             })
         return json.dumps({
-            "decision": "APPROVE",
-            "reason": "Mock mode: no hard-rule evidence of risk in the supplied context.",
-            "risk_score": 10.0,
+            "decision": "ESCALATE",
+            "reason": "Mock mode: no real model assessment was performed.",
+            "risk_score": 0.0,
             "modified_quantity": None,
-            "rules_triggered": []
+            "rules_triggered": ["mock_mode"]
         })
 
     def _call_meta(self, *, kind: str, system: str, payload: str) -> str:
@@ -343,6 +433,7 @@ class ModelAdapter:
             max_retries=self.config.max_retries,  # 0: no silent retries
         )
         started = time.monotonic()
+        schema = TRADER_SCHEMA if kind == "trader" else GUARDIAN_SCHEMA
         try:
             response = client.chat.completions.create(
                 model=self.config.model,
@@ -351,7 +442,14 @@ class ModelAdapter:
                     {"role": "user", "content": payload},
                 ],
                 # Ask for a JSON object; validation below still enforces the exact schema.
-                response_format={"type": "json_object"},
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": f"{kind}_decision",
+                        "strict": True,
+                        "schema": schema
+                    }
+                },
                 timeout=self.config.timeout_seconds,
             )
         except Exception as exc:
@@ -367,12 +465,24 @@ class ModelAdapter:
         if not response.choices:
             raise LLMProviderError("Meta Model API returned no choices.")
         choice = response.choices[0]
-        if getattr(choice, "finish_reason", None) in ("refusal", "content_filter"):
-            raise LLMProviderError(f"Model refused to answer (finish_reason={choice.finish_reason}).")
-        content = getattr(choice.message, "content", None)
-        if content is None or not str(content).strip():
-            raise LLMValidationError("Model returned empty content.")
-        return str(content)
+
+        if getattr(choice, "finish_reason", None) != "stop":
+            raise LLMProviderError(
+                "Model response did not finish normally."
+            )
+
+        message = getattr(choice, "message", None)
+        if message is None:
+            raise LLMProviderError("Model returned no message.")
+
+        if getattr(message, "refusal", None):
+            raise LLMProviderError("Model refused the request.")
+
+        content = getattr(message, "content", None)
+        if not isinstance(content, str) or not content.strip():
+            raise LLMValidationError("Model returned empty or non-text content.")
+
+        return content
 
 
 # Backwards-friendly alias used in the prep-plan wiring example.

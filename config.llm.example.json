@@ -1,1 +1,8 @@
-{"api_key_env":"MODEL_API_KEY","base_url":"https://api.meta.ai/v1","max_retries":0,"model":"muse-spark-1.3","provider":"mock","timeout_seconds":30}
+{
+  "provider": "gemini",
+  "model": "YOUR_SUPPORTED_GEMINI_MODEL",
+  "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+  "api_key_env": "GEMINI_API_KEY",
+  "timeout_seconds": 30,
+  "max_retries": 0
+}

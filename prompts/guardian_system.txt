@@ -19,7 +19,7 @@ FIELD RULES
 - "decision": exactly one of "APPROVE", "MODIFY", "BLOCK", "ESCALATE".
   Use BLOCK for a clear rule breach, an unauthorised action, or an oversized trade. Use ESCALATE when evidence is missing, the proposal is unclear, or you cannot judge safely. Use MODIFY only to REDUCE a positive requested quantity — never to increase it, and never to change the symbol, side or action.
 - "reason": a short non-empty reason. Name the rule or evidence that mattered most.
-- "risk_score": a number from 0 to 100, with at most ONE decimal place (for example 72.5, not 72.53). 0 is safest, 100 is most dangerous.
+- "risk_score": a number from 0 to 100, with at most TWO decimal places, for example 72.53.
 - "modified_quantity": null, EXCEPT when decision is "MODIFY", when it MUST be a positive number smaller than the requested quantity.
 - "rules_triggered": a list of rule names that fired, for example ["transaction_ceiling", "hourly_quota"]. Use an empty list [] if none fired.
 

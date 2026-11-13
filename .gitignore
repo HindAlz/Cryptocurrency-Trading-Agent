@@ -7,3 +7,5 @@ config.local.json
 runtime/
 logs/
 config.json
+config.llm.local.json
+key.txt
