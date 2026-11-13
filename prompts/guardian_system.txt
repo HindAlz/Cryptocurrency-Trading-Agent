@@ -12,6 +12,8 @@ Return ONLY a single JSON object with EXACTLY these five fields, no extra fields
   "modified_quantity": null,
   "rules_triggered": []
 }
+Do NOT include any other field. In particular, do NOT copy fields from the input into your answer — do NOT include requested_usd, transaction_ceiling_usd, symbol, action, quantity, or current_price_usd.
+
 
 FIELD RULES
 - "decision": exactly one of "APPROVE", "MODIFY", "BLOCK", "ESCALATE".

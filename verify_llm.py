@@ -1,16 +1,10 @@
-"""Verify ONE real Muse call (not tested live; everything is offline)
+"""Verify ONE real call 
 
-    $env:MODEL_API_KEY = "LLM_...paste-yours-here..."
-    python verify_muse.py
-
-This makes exactly one trader call and one guardian call with
-provider "meta" (set "provider": "meta" in your PRIVATE config.json
-first), prints the validated results, and exits.
+    $env:GEMINI_API_KEY = "LLM_...paste-yours-here..."
+    python verify_llm.py
 
 It prints NO API key. If anything fails, it prints the error type
 and a short hint instead of a stack trace full of details.
-Switch config.json back to "provider": "mock" afterwards so you
-do not spend money by accident.
 """
 from llm_adapter import LLMError, create_adapter
 
@@ -41,8 +35,8 @@ GUARDIAN_CONTEXT = {
 def main():
     llm = create_adapter("config.json")
     print(f"Provider: {llm.config.provider} | Model: {llm.config.model} | Base URL: {llm.config.base_url}")
-    if llm.config.provider != "meta":
-        print("You are in mock mode. Change config.json to \"provider\": \"meta\" for a real call.")
+    if llm.config.provider == "mock":
+        print("You are in mock mode. Change config.json to \"provider\": \"meta\" (Muse) or \"gemini\" for a real call.")
     try:
         trader = llm.trader_decision(TRADER_CONTEXT)
         print(f"Trader: {trader}")

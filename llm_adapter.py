@@ -59,7 +59,7 @@ class GuardianDecision:
 
 @dataclass
 class ModelConfig:
-    provider: str = "mock"  # "mock" for offline dev, "meta" for the real API
+    provider: str = "mock"  # "mock" for offline dev, "meta" for Muse, "gemini" for Gemini
     model: str = "muse-spark-1.3"
     base_url: str = "https://api.meta.ai/v1"
     timeout_seconds: float = 30.0
@@ -254,8 +254,8 @@ class ModelAdapter:
 
     def __init__(self, config: ModelConfig | None = None):
         self.config = config or ModelConfig()
-        if self.config.provider not in ("mock", "meta"):
-            raise ValueError(f"Unknown provider {self.config.provider!r}. Use 'mock' or 'meta'.")
+        if self.config.provider not in ("mock", "meta", "gemini"):
+            raise ValueError(f"Unknown provider {self.config.provider!r}. Use 'mock', 'meta' or 'gemini'.")
         self._prompts_dir = Path(__file__).resolve().parent / "prompts"
 
     @classmethod
@@ -301,7 +301,7 @@ class ModelAdapter:
     def _call(self, *, kind: str, system: str, payload: str, context: dict) -> str:
         if self.config.provider == "mock":
             return self._call_mock(kind, context)
-        return self._call_meta(kind, system, payload)
+        return self._call_meta(kind=kind, system=system, payload=payload)
 
     def _call_mock(self, kind: str, context: dict) -> str:
         """Offline stand-in. Members 2/3 can inject a sample via
