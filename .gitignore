@@ -6,3 +6,6 @@ config.local.json
 .env
 runtime/
 logs/
+config.json
+config.llm.local.json
+key.txt

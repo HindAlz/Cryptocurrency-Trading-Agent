@@ -1,0 +1,8 @@
+{
+  "provider": "gemini",
+  "model": "YOUR_SUPPORTED_GEMINI_MODEL",
+  "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+  "api_key_env": "GEMINI_API_KEY",
+  "timeout_seconds": 30,
+  "max_retries": 0
+}
