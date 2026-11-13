@@ -334,6 +334,10 @@ class ModelAdapter:
         if config is None:
             raise ValueError("Pass an explicit ModelConfig.")
         self.config = config
+
+        if self.config.provider not in {"mock", "meta", "gemini"}:
+            raise ValueError("Unknown provider. Use mock, meta, or gemini.")
+
         if self.config.provider != "mock" and not self.config.model.strip():
             raise ValueError("Specify the provider model in configuration.")
         self._prompts_dir = Path(__file__).resolve().parent / "prompts"
