@@ -36,7 +36,8 @@ def main():
     llm = create_adapter("config.llm.local.json")
     print(f"Provider: {llm.config.provider} | Model: {llm.config.model} | Base URL: {llm.config.base_url}")
     if llm.config.provider == "mock":
-        print("You are in mock mode. Change config.json to \"provider\": \"meta\" (Muse) or \"gemini\" for a real call.")
+        print("Real-provider verification requires Gemini, not mock mode.")
+        return 1
     try:
         trader = llm.trader_decision(TRADER_CONTEXT)
         print(f"Trader: {trader}")

@@ -102,12 +102,12 @@ class GuardianDecision:
 
 @dataclass
 class ModelConfig:
-    provider: str = "gemini"  # "mock" for offline dev, "meta" for Muse, "gemini" for Gemini
-    model: str = "muse-spark-1.3"
-    base_url: str = "https://api.meta.ai/v1"
+    provider: str = "gemini"
+    model: str = ""  # Must be supplied in configuration.
+    base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
     timeout_seconds: float = 30.0
     max_retries: int = 0
-    api_key_env: str = "MODEL_API_KEY"
+    api_key_env: str = "GEMINI_API_KEY"
 
     @classmethod
     def from_file(cls, path: str | Path) -> "ModelConfig":
@@ -334,8 +334,8 @@ class ModelAdapter:
         if config is None:
             raise ValueError("Pass an explicit ModelConfig.")
         self.config = config
-        if self.config.provider not in ("mock", "meta", "gemini"):
-            raise ValueError(f"Unknown provider {self.config.provider!r}. Use 'mock', 'meta' or 'gemini'.")
+        if self.config.provider != "mock" and not self.config.model.strip():
+            raise ValueError("Specify the provider model in configuration.")
         self._prompts_dir = Path(__file__).resolve().parent / "prompts"
 
     @classmethod
@@ -368,7 +368,6 @@ class ModelAdapter:
                 "Context must contain only valid JSON values "
                 "with finite numbers."
             ) from exc
-        payload = json.dumps(context, sort_keys=True, indent=2, default=str)
         _assert_no_secrets(payload)
         if len(payload) > 20000:
             raise ValueError("context is too large to send to the model (>20,000 chars).")
@@ -454,13 +453,11 @@ class ModelAdapter:
             )
         except Exception as exc:
             elapsed = time.monotonic() - started
-            # Do not include the key or the raw body in the error.
             raise LLMProviderError(
-                f"Meta Model API call failed after {elapsed:.1f}s "
-                f"({type(exc).__name__}: {exc}). "
-                f"Check MODEL_API_KEY, base_url={self.config.base_url}, "
-                f"model={self.config.model}, and your network."
-            ) from exc
+                f"Provider call failed after {elapsed:.1f}s "
+                f"({type(exc).__name__}). "
+                "Check provider configuration, credentials, and connectivity."
+            ) from None
 
         if not response.choices:
             raise LLMProviderError("Meta Model API returned no choices.")
