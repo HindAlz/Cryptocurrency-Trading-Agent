@@ -9,3 +9,4 @@ logs/
 config.json
 config.llm.local.json
 key.txt
+runtime/
