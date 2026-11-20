@@ -1,3 +1,4 @@
+
 """Local integration tests only. No network calls or real credentials."""
 import tempfile
 import unittest
@@ -90,5 +91,48 @@ class Member2Tests(unittest.TestCase):
         self.assertEqual(result['status'],'UNRESOLVED')
         self.assertEqual(len(self.state.get_unresolved_intents()),1)
         self.assertEqual(self.run_cycle()['status'],'HOLD')
+
+class MomentumTests(unittest.TestCase):
+    def setUp(self):
+        from strategy import determine_triggers
+        self.determine_triggers = determine_triggers
+        self.theory = dict(THEORY, strategy='momentum', threshold_pct=0.5,
+                           position_fraction=0.05, stop_loss_pct=2, take_profit_pct=4,
+                           lookback_minutes=30)
+
+    def test_momentum_buy(self):
+        entry, exits = self.determine_triggers(
+            self.theory, {'lookback_return_pct': 0.8,
+                          'return_since_avg_cost_pct': None}, 0)
+        self.assertTrue(entry)
+        self.assertEqual(exits, [])
+
+    def test_momentum_below_threshold_holds(self):
+        entry, exits = self.determine_triggers(
+            self.theory, {'lookback_return_pct': 0.2,
+                          'return_since_avg_cost_pct': None}, 0)
+        self.assertFalse(entry)
+        self.assertEqual(exits, [])
+
+    def test_momentum_sell(self):
+        entry, exits = self.determine_triggers(
+            self.theory, {'lookback_return_pct': -0.8,
+                          'return_since_avg_cost_pct': -1}, 10)
+        self.assertFalse(entry)
+        self.assertIn('momentum_exit', exits)
+
+    def test_momentum_stop_loss(self):
+        entry, exits = self.determine_triggers(
+            self.theory, {'lookback_return_pct': 0.1,
+                          'return_since_avg_cost_pct': -2.5}, 10)
+        self.assertFalse(entry)
+        self.assertIn('stop_loss', exits)
+
+    def test_momentum_take_profit(self):
+        entry, exits = self.determine_triggers(
+            self.theory, {'lookback_return_pct': 0.1,
+                          'return_since_avg_cost_pct': 4.5}, 10)
+        self.assertFalse(entry)
+        self.assertIn('take_profit', exits)
 
 if __name__=='__main__': unittest.main()
