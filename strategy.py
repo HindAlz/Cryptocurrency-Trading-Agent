@@ -1,7 +1,7 @@
-"""Member 2: conservative checks against the shared team theory/policy interface.
 
-No heuristic is substituted for the user's active theory. Until the course's
-strategy specification is confirmed, unknown strategies HOLD safely.
+"""Member 2: trading strategy validation and safe trade sizing.
+
+Supports structured momentum and mean-reversion theories. Unknown strategies HOLD.
 """
 from decimal import Decimal, ROUND_DOWN, InvalidOperation
 
@@ -70,23 +70,44 @@ def calculate_signals(points, lookback_minutes, avg_cost, holdings):
     return out
 
 def determine_triggers(theory, signals, holdings):
-    """Implemented strategy: mean-reversion only. Unsupported strategy -> HOLD."""
-    strategy = str(theory['strategy']).lower().replace('-','_').replace(' ','_')
-    if strategy not in ('mean_reversion', 'meanreversion'):
-        raise StrategyError('Strategy needs instructor-specific implementation')
-    threshold = num(theory['threshold_pct'],'threshold_pct')
-    owned = num(holdings,'holdings')
-    deviation = num(signals['mean_deviation_pct'],'mean deviation')
+    """Generate structured strategy triggers without overriding hard security rules.
+
+    Momentum: enter after a sufficiently positive lookback return, exit after a
+    sufficiently negative return. Mean reversion: enter below the lookback mean,
+    exit above it. Stop-loss and take-profit take priority when holdings exist.
+    """
+    strategy = str(theory['strategy']).lower().replace('-', '_').replace(' ', '_')
+    threshold = num(theory['threshold_pct'], 'threshold_pct')
+    owned = num(holdings, 'holdings')
+    if threshold <= 0 or owned < 0:
+        raise StrategyError('Invalid strategy threshold/holdings')
+
+    if strategy == 'momentum':
+        signal = num(signals['lookback_return_pct'], 'lookback return')
+        entry = signal >= threshold
+        exit_signal = signal <= -threshold
+        exit_name = 'momentum_exit'
+    elif strategy in ('mean_reversion', 'meanreversion'):
+        signal = num(signals['mean_deviation_pct'], 'mean deviation')
+        entry = signal <= -threshold
+        exit_signal = signal >= threshold
+        exit_name = 'mean_reversion_exit'
+    else:
+        raise StrategyError('Unsupported strategy: HOLD')
+
     exit_triggers = []
     if owned > 0:
-        ret = num(signals['return_since_avg_cost_pct'],'cost return')
-        if ret <= -num(theory['stop_loss_pct'],'stop-loss'):
+        cost_return = num(signals['return_since_avg_cost_pct'], 'cost return')
+        if cost_return <= -num(theory['stop_loss_pct'], 'stop-loss'):
             exit_triggers.append('stop_loss')
-        if ret >= num(theory['take_profit_pct'],'take-profit'):
+        if cost_return >= num(theory['take_profit_pct'], 'take-profit'):
             exit_triggers.append('take_profit')
-        if deviation >= threshold:
-            exit_triggers.append('mean_reversion_exit')
-    return owned == 0 and deviation <= -threshold, exit_triggers
+        if exit_signal:
+            exit_triggers.append(exit_name)
+
+    # Do not open a second position when one is already held. This is an
+    # intentionally conservative project choice, not a platform requirement.
+    return owned == 0 and entry, exit_triggers
 
 def quantity_bounds(theory, policy, cash, holdings, price, decimal_places=8, minimum_usd='0.01'):
     p, balance, owned = num(price,'price'),num(cash,'cash'),num(holdings,'holdings')
