@@ -196,7 +196,7 @@ def check_trade(order, policy, current_price,
             if (
                 order["theory_id"] != theory_snapshot["id"]
                 or order["theory_version"] != theory_snapshot["version"]
-                or theory_snapshot["status"] != "SUBMITTED"
+                or str(theory_snapshot["status"]).upper() != "SUBMITTED"
             ):
                 escalate("THEORY_MISMATCH")
 
@@ -256,7 +256,7 @@ def check_theory_compliance(
         if (
             order["theory_id"] != theory["id"]
             or order["theory_version"] != theory["version"]
-            or theory["status"] != "SUBMITTED"
+            or str(theory["status"]).upper() != "SUBMITTED"
         ):
             return {
                 "decision": "ESCALATE",
@@ -269,7 +269,7 @@ def check_theory_compliance(
             violations.append("SYMBOL_NOT_IN_THEORY")
 
         # Only implement the documented momentum strategy here.
-        if theory["strategy"] != "momentum":
+        if theory["strategy"] not in {"momentum", "mean_reversion"}:
             return {
                 "decision": "ESCALATE",
                 "rules_triggered": ["STRATEGY_NOT_IMPLEMENTED"]
@@ -305,8 +305,14 @@ def check_theory_compliance(
             raise ValueError("Invalid market return")
 
         if action == "BUY":
-            # Momentum entry condition
-            if lookback_return < threshold:
+            if theory["strategy"] == "momentum":
+                entry_met = lookback_return >= threshold
+            else:
+                deviation = Decimal(str(signals["mean_deviation_pct"]))
+                if not deviation.is_finite():
+                    raise ValueError("Invalid mean deviation")
+                entry_met = deviation <= -threshold
+            if not entry_met:
                 violations.append("BUY_SIGNAL_NOT_TRIGGERED")
 
             cash = number(portfolio["cash_usd"])
@@ -343,7 +349,13 @@ def check_theory_compliance(
                 theory["take_profit_pct"], positive=True
             )
 
-            momentum_sell = lookback_return <= -threshold
+            if theory["strategy"] == "momentum":
+                momentum_sell = lookback_return <= -threshold
+            else:
+                deviation = Decimal(str(signals["mean_deviation_pct"]))
+                if not deviation.is_finite():
+                    raise ValueError("Invalid mean deviation")
+                momentum_sell = deviation >= threshold
             stop_trigger = change_from_cost <= -stop_loss
             profit_trigger = change_from_cost >= take_profit
 
@@ -368,3 +380,4 @@ def check_theory_compliance(
         "decision": "BLOCK" if violations else "PASS",
         "rules_triggered": violations
     }
+

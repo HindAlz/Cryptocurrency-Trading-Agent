@@ -54,7 +54,7 @@ def prepare_review(transaction_id, model_result, requested_quantity):
     }
 
 
-def review_pending(client, llm=None, state=None, signal_provider=None):
+def inspect_pending(client, llm=None, state=None, signal_provider=None):
     """
     Inspect real Ledger pending orders with hard security rules.
 
@@ -216,6 +216,8 @@ def evaluate_order(order, policy, current_price,
 def normalize_order(pending):
     """Convert a Ledger pending order into our rule format."""
     return {
+        "transaction_id": pending.get("transaction_id"),
+        "requested_price": pending.get("requested_price"),
         "symbol": pending["symbol"],
         "action": pending["action"],
         "quantity": pending["requested_quantity"],
@@ -474,93 +476,22 @@ def final_recheck(
 
 
 def submit_review_safely(client, review, recheck_result=None):
+    """Compatibility helper for BLOCK/ESCALATE only.
+
+    APPROVE/MODIFY must use guardian_live.recheck_and_submit, which
+    refreshes evidence internally instead of trusting a PASS dictionary.
     """
-    Submit one already-validated Guardian review.
+    from guardian_live import submit_non_authorizing
+    return submit_non_authorizing(client, review)
 
-    Approval and modification require a successful final recheck.
-    Never retry an uncertain POST automatically.
 
-    This function is not a replacement for the full
-    Guardian decision workflow.
-    """
-
-    if not isinstance(review, dict):
-        raise ValueError("Review must be a dictionary")
-
-    decision = review.get("decision")
-    transaction_id = review.get("transaction_id")
-
-    if type(transaction_id) is not int or transaction_id <= 0:
-        raise ValueError("Invalid transaction ID")
-
-    if decision not in {
-        "APPROVE", "MODIFY", "BLOCK", "ESCALATE"
-    }:
-        raise ValueError("Invalid Guardian decision")
-
-    # Reject malformed review payloads before sending.
-    from llm_adapter import validate_guardian_response
-
-    validate_guardian_response({
-        "decision": review.get("decision"),
-        "reason": review.get("reason"),
-        "risk_score": review.get("risk_score"),
-        "modified_quantity": (
-            float(review["modified_quantity"])
-            if decision == "MODIFY"
-            else review.get("modified_quantity")
-        ),
-        "rules_triggered": review.get("rules_triggered")
-    })
-
-    # Never approve or modify without a final PASS.
-    if decision in {"APPROVE", "MODIFY"}:
-        if not isinstance(recheck_result, dict):
-            raise ValueError("Final recheck is missing")
-
-        if recheck_result.get("decision") != "PASS":
-            raise ValueError(
-                "Cannot authorize: final security recheck failed"
-            )
-
-    # Submit exactly once.
-    try:
-        response = client.submit_review(review)
-
-    except UncertainWrite:
-        # We do not know whether Ledger processed the POST.
-        # The caller must persist and reconcile this outcome.
-        return {
-            "transaction_id": transaction_id,
-            "status": "UNCERTAIN",
-            "needs_reconciliation": True
-        }
-
-    # Do not assume the desired decision was executed.
-    if not isinstance(response, dict):
-        return {
-            "transaction_id": transaction_id,
-            "status": "UNCERTAIN",
-            "needs_reconciliation": True
-        }
-
-    if (
-        response.get("transaction_id") != transaction_id
-        or response.get("status") not in {
-            "EXECUTED", "BLOCKED", "REJECTED", "ESCALATED"
-        }
-    ):
-        return {
-            "transaction_id": transaction_id,
-            "status": "UNCERTAIN",
-            "needs_reconciliation": True
-        }
-
-    return {
-        "transaction_id": transaction_id,
-        "status": response["status"],
-        "needs_reconciliation": False
-    }
+def review_pending(client, llm=None, state=None, signal_provider=None,
+                   *, submit=False, **options):
+    """Read-only by default. Explicit submit=True enables live reviews."""
+    if not submit:
+        return inspect_pending(client, llm, state, signal_provider)
+    from guardian_live import review_pending_live
+    return review_pending_live(client, llm, state, signal_provider, **options)
 
 
 def guardian_decision_dry_run(
@@ -668,10 +599,11 @@ if __name__ == "__main__":
     )
 
     try:
-        review_pending(guardian_client)
+        inspect_pending(guardian_client)
 
     except Cooldown as error:
         print(f"Ledger cooldown: retry after {error.seconds:.1f}s")
 
     except ApiError as error:
         print(f"Ledger request failed: HTTP {error.status}")
+
