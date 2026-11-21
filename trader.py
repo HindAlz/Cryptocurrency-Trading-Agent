@@ -1,5 +1,6 @@
 """One trader cycle using real Ledger envelopes and agreed context version 1."""
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_FLOOR
 import math
 
 from client import ApiError, Cooldown, UncertainWrite
@@ -68,7 +69,7 @@ def _remember_response(state, intent_id, reply):
 
 
 def run_trader_cycle(client, llm, state, *, symbol=None, decision_time=None,
-                     replay=None, require_flat_entry=False, submit=True):
+                     replay=None, require_flat_entry=False, submit=True, buy_reserve_pct=1):
     """At most one proposal. Pass submit=False for a no-write preview.
 
     Reuse MarketReplay(client) between cycles for descriptor caching.
@@ -111,6 +112,18 @@ def run_trader_cycle(client, llm, state, *, symbol=None, decision_time=None,
             return _hold("Theory action is restricted")
         internal_policy = policy_context(policy)
         bounds = quantity_bounds(theory, internal_policy, cash, held, quote["price"])
+        # Planning reserve only: theory/policy and Guardian limits stay unchanged.
+        # A 1% reserve on a $500 hard BUY budget targets at most $495.
+        reserve = num(buy_reserve_pct, "BUY reserve percent")
+        if not 0 <= reserve < 100:
+            raise StrategyError("BUY reserve percent must be in [0, 100)")
+        if expected == "BUY":
+            target = (num(bounds["max_buy_budget_usd"]) *
+                      (1 - reserve / 100)).quantize(Decimal("0.01"), rounding=ROUND_FLOOR)
+            quantity = (target / num(quote["price"])).quantize(
+                Decimal("1e-10"), rounding=ROUND_FLOOR)
+            bounds["max_buy_budget_usd"] = float(target)
+            bounds["max_buy_quantity"] = float(quantity)
         if bounds["max_buy_quantity" if expected == "BUY" else "max_sell_quantity"] <= 0:
             return _hold("No affordable/permitted quantity")
         context = {

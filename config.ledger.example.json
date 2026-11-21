@@ -1,0 +1,5 @@
+{
+  "LEDGER_BASE_URL": "https://ledger.chanyeun.com/api/v1",
+  "TRADER_API_KEY": "REPLACE_LOCALLY",
+  "GUARDIAN_API_KEY": "REPLACE_LOCALLY"
+}
