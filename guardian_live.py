@@ -13,6 +13,7 @@ from client import Cooldown, UncertainWrite
 from guardian_rules import check_trade, check_theory_compliance, number, normalize_list
 from llm_adapter import validate_guardian_response, validate_context
 from guardian_signals import IndependentSignals
+from custom_sma import crossover_flags
 
 FINAL = {"EXECUTED", "BLOCKED", "REJECTED"}
 
@@ -144,7 +145,8 @@ def assess(order, theory, policy, portfolio, quote, signal_provider,
     hard = check_trade(order, policy, quote["price"], portfolio, theory)
     if hard["decision"] != "PASS":
         return hard, None
-    if (require_flat_entry and order["action"] == "BUY"
+    if ((require_flat_entry or (isinstance(theory, dict) and theory.get("strategy") == "custom"))
+            and order["action"] == "BUY"
             and number(portfolio["symbol_quantity"]) > 0):
         return {"decision": "BLOCK", "rules_triggered": ["EXISTING_POSITION"]}, None
     if signal_provider is None:
@@ -181,7 +183,13 @@ def build_context(order, theory, policy, portfolio, quote, signals, now,
             exits.append("negative_momentum")
         if theory["strategy"] == "mean_reversion" and mean >= threshold:
             exits.append("mean_reversion_exit")
-    entry = lookback >= threshold if theory["strategy"] == "momentum" else mean <= -threshold
+    if theory["strategy"] == "custom":
+        entry, custom_sell = crossover_flags(theory, signals.get("custom"))
+        if holding > 0 and custom_sell:
+            exits.append("custom_exit")
+        require_flat_entry = True
+    else:
+        entry = lookback >= threshold if theory["strategy"] == "momentum" else mean <= -threshold
     evidence.update(entry_triggered=bool(entry and not (require_flat_entry and holding > 0)),
                     exit_triggers=exits,
                     return_since_avg_cost_pct=float(cost_return) if cost_return is not None else None)
@@ -324,3 +332,4 @@ def review_pending_live(client, llm, state, signal_provider=None, *,
         if response["status"] == "UNCERTAIN":
             break
     return results
+

@@ -1,5 +1,6 @@
 """Deterministic strategy and money checks. Percent values are percentage points."""
 from dataclasses import asdict, is_dataclass
+from custom_sma import validate_custom, crossover_flags
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR
 
 SUPPORTED = {"BTC", "ETH", "DOGE", "XMR", "XRP", "SOL"}
@@ -39,8 +40,10 @@ def validate_theory(theory, policy, symbol):
             raise StrategyError("Invalid symbol list")
         if symbol not in entries:
             raise StrategyError("Symbol not permitted")
-    if theory.get("strategy") not in {"momentum", "mean_reversion"}:
-        raise StrategyError("Custom/unimplemented strategy")
+    if theory.get("strategy") == "custom":
+        validate_custom(theory)
+    elif theory.get("strategy") not in {"momentum", "mean_reversion"}:
+        raise StrategyError("Unimplemented strategy")
     lookback = theory.get("lookback_minutes")
     if type(lookback) is not int or not 1 <= lookback <= 1440:
         raise StrategyError("Invalid lookback")
@@ -121,6 +124,13 @@ def determine_triggers(theory, signals, holdings, *, require_flat_entry=False):
         signal = num(signals["mean_deviation_pct"])
         entry, exit_signal = signal <= -threshold, signal >= threshold
         exit_name = "mean_reversion_exit"
+    elif theory["strategy"] == "custom":
+        try:
+            entry, exit_signal = crossover_flags(theory, signals.get("custom"))
+        except (ValueError, KeyError, TypeError) as exc:
+            raise StrategyError("Invalid/unsupported custom evidence") from exc
+        exit_name = "custom_exit"
+        require_flat_entry = True
     else:
         raise StrategyError("Unsupported strategy")
     exits = []
@@ -193,3 +203,4 @@ def validate_decision(decision, symbol, expected, bounds, price, policy):
         raise StrategyError("BUY exceeds budget after settlement")
     return {"symbol": symbol, "action": action, "quantity": format(q.normalize(), "f"),
             "reasoning": reason.strip()}
+
