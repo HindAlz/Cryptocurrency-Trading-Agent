@@ -1,18 +1,18 @@
-"""Historical market data checks and signals for Member 2.
+"""Trader replay: Appendix A formula, exactly 61 samples ending at quote time.
 
-IMPORTANT: The course's original market-descriptor reconstruction formula was not
-included in the supplied team plan. A reconstruction callback must be supplied
-for descriptor-only data; the module never invents that formula.
+Reuses the pure formula already shipped with the Guardian. Each agent obtains
+its own quote/descriptor and validates its own replay. No future observations.
 """
-from __future__ import annotations
+import math
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from math import isfinite
-from typing import Any, Callable, Mapping, Sequence
+from decimal import Decimal
+from guardian_signals import price_at
 
 
 class MarketDataError(ValueError):
-    """Market observations are missing, inconsistent, or not yet supported."""
+    pass
 
 
 @dataclass(frozen=True)
@@ -20,107 +20,63 @@ class PricePoint:
     timestamp: datetime
     price: float
 
-    def __post_init__(self) -> None:
-        if self.timestamp.tzinfo is None:
-            raise MarketDataError("Price timestamps must include a timezone")
-        if not isfinite(float(self.price)) or self.price <= 0:
-            raise MarketDataError("Price must be positive and finite")
+
+def reconstruct_prices(model, symbol, timestamp_unix, lookback_minutes):
+    if type(lookback_minutes) is not int or not 1 <= lookback_minutes <= 1440:
+        raise MarketDataError("Invalid lookback")
+    if type(timestamp_unix) not in (int, float) or not math.isfinite(timestamp_unix):
+        raise MarketDataError("Invalid quote timestamp")
+    start = timestamp_unix - lookback_minutes * 60
+    if start < model["epoch_unix"]:
+        raise MarketDataError("Insufficient simulated history")
+    samples = []
+    for i in range(61):
+        t = start + (timestamp_unix - start) * i / 60
+        p = price_at(model, symbol, t)
+        if not math.isfinite(p) or p <= 0:
+            raise MarketDataError("Invalid replay price")
+        samples.append(PricePoint(datetime.fromtimestamp(t, timezone.utc), p))
+    return samples
 
 
-def parse_price_points(raw: Sequence[Mapping[str, Any]], decision_time: datetime) -> list[PricePoint]:
-    """Parse and filter prices, rejecting duplicate/out-of-order timestamps.
-
-    Timestamps may be aware ISO-8601 strings or aware datetime objects.
-    Only observations at or before decision_time can influence a decision.
-    """
-    if decision_time.tzinfo is None:
-        raise MarketDataError("decision_time must include a timezone")
-    result: list[PricePoint] = []
-    for item in raw:
-        stamp = item["timestamp"]
-        if isinstance(stamp, str):
-            stamp = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
-        point = PricePoint(stamp, float(item["price"]))
-        if result and point.timestamp <= result[-1].timestamp:
-            raise MarketDataError("Prices must be strictly chronological")
-        if point.timestamp <= decision_time:
-            result.append(point)
-    if not result:
-        raise MarketDataError("No market observations at or before decision time")
-    return result
+def check_current_quote(points, current_quote, quote_timestamp):
+    if len(points) != 61:
+        raise MarketDataError("Expected 61 replay samples")
+    if points[-1].timestamp.timestamp() != quote_timestamp:
+        raise MarketDataError("Replay and quote timestamps differ")
+    if abs(Decimal(str(points[-1].price)) - Decimal(str(current_quote))) > Decimal("0.00000001"):
+        raise MarketDataError("Replay disagrees with quote")
 
 
-def reconstruct_prices(
-    descriptor: Mapping[str, Any],
-    decision_time: datetime,
-    reference_reconstructor: Callable[[Mapping[str, Any], datetime], Sequence[Mapping[str, Any]]] | None = None,
-) -> list[PricePoint]:
-    """Replay descriptor; the course-specific formula is injected by caller.
+class MarketReplay:
+    def __init__(self, client, cache_seconds=180):
+        self.client = client
+        self.cache_seconds = cache_seconds
+        self.model = None
+        self.fetched_at = 0
 
-    An explicit `historical_prices` list can be used by tests and demos.
-    For real course descriptors, provide the instructor's formula as a callback.
-    """
-    if "historical_prices" in descriptor:
-        raw = descriptor["historical_prices"]
-    elif reference_reconstructor is not None:
-        raw = reference_reconstructor(descriptor, decision_time)
-    else:
-        raise MarketDataError(
-            "Course market replay formula not available. Supply "
-            "reference_reconstructor from the original assignment guide."
-        )
-    return parse_price_points(raw, decision_time)
+    def _refresh(self):
+        response = self.client.get_market_model()
+        model = response["model"]
+        if not isinstance(model, dict):
+            raise MarketDataError("Invalid model descriptor")
+        self.model = model
+        self.fetched_at = time.monotonic()
 
-
-def verify_fixtures(
-    points: Sequence[PricePoint], fixtures: Sequence[Mapping[str, Any]], tolerance: float = 1e-6
-) -> None:
-    """Verify independently provided expected timestamp/price fixtures."""
-    if not isfinite(tolerance) or tolerance < 0:
-        raise ValueError("Invalid fixture tolerance")
-    lookup = {p.timestamp.isoformat(): p.price for p in points}
-    for fixture in fixtures:
-        stamp = fixture["timestamp"]
-        if isinstance(stamp, datetime):
-            stamp = stamp.isoformat()
-        else:
-            stamp = datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).isoformat()
-        expected = float(fixture["price"])
-        if stamp not in lookup or not isfinite(expected) or abs(lookup[stamp] - expected) > tolerance:
-            raise MarketDataError(f"Replay fixture mismatch at {stamp}")
-
-
-def check_current_quote(points: Sequence[PricePoint], current_quote: float, tolerance_fraction: float = 0.001) -> None:
-    """Check latest replayed sample against current quote (configurable tolerance).
-
-    Caller must ensure the comparison timestamp is relevant to the quote.
-    A mismatch requires one descriptor refresh, then HOLD if still mismatched.
-    """
-    quote = float(current_quote)
-    if not points or not isfinite(quote) or quote <= 0:
-        raise MarketDataError("Invalid quote or missing price samples")
-    if not isfinite(tolerance_fraction) or tolerance_fraction < 0:
-        raise MarketDataError("Invalid quote tolerance")
-    if abs(points[-1].price - quote) / quote > tolerance_fraction:
-        raise MarketDataError("Replay price disagrees with current quote")
-
-
-def compute_signals(points: Sequence[PricePoint], lookback: int = 3) -> dict[str, float]:
-    """Compute percent return and simple mean-reversion deviation (percent).
-
-    A negative deviation indicates a price below its lookback average. Signals
-    are information, not BUY/SELL instructions.
-    """
-    if isinstance(lookback, bool) or not isinstance(lookback, int) or lookback < 1:
-        raise MarketDataError("lookback must be a positive integer")
-    if len(points) < lookback + 1:
-        raise MarketDataError("Not enough price observations for lookback")
-    last = points[-1].price
-    prior = points[-lookback - 1].price
-    window = [p.price for p in points[-lookback - 1:-1]]
-    mean = sum(window) / len(window)
-    return {
-        "lookback_return_pct": (last / prior - 1) * 100,
-        "mean_reversion_deviation_pct": (last / mean - 1) * 100,
-        "latest_price": last,
-    }
+    def samples(self, symbol, quote, lookback_minutes):
+        for attempt in range(2):
+            if (attempt or self.model is None
+                    or self.model["version"] != quote["model_version"]
+                    or time.monotonic() - self.fetched_at > self.cache_seconds):
+                self._refresh()
+            if self.model["version"] != quote["model_version"]:
+                continue
+            points = reconstruct_prices(self.model, symbol, quote["timestamp_unix"], lookback_minutes)
+            try:
+                check_current_quote(points, quote["price"], quote["timestamp_unix"])
+            except MarketDataError:
+                if attempt:
+                    raise
+                continue
+            return points
+        raise MarketDataError("Model version disagrees after one refresh")

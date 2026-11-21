@@ -1,121 +1,172 @@
-"""Member 2 Trading Agent integration for Hind's client/state and Mariyam's AI.
-
-Fail-closed: needs course replay callback and confirmed Ledger response envelope.
-Never retry uncertain POST outcomes automatically.
-"""
-from __future__ import annotations
+"""One trader cycle using real Ledger envelopes and agreed context version 1."""
 from datetime import datetime, timezone
-from market_replay import reconstruct_prices, verify_fixtures, check_current_quote, MarketDataError
-from strategy import (StrategyError, num, validate_theory, calculate_signals,
-                      determine_triggers, quantity_bounds, validate_decision)
+import math
+
+from client import ApiError, Cooldown, UncertainWrite
+from llm_adapter import validate_context
+from market_replay import MarketReplay
+from strategy import (StrategyError, num, validate_theory, validate_policy,
+                      policy_context, calculate_signals, determine_triggers,
+                      quantity_bounds, validate_decision)
 
 
-def _payload(result, key):
-    """Do not invent Ledger payload schemas: accept explicit direct dictionary only."""
-    if not isinstance(result, dict): raise StrategyError(f'Invalid {key} response')
-    return result
+def _hold(reason):
+    return {"status": "HOLD", "reason": reason}
 
 
-def run_trader_cycle(client, llm, state, *, symbol='XRP', decision_time=None,
-                     reference_reconstructor=None, quote_tolerance_fraction=0.001,
-                     quantity_decimal_places=None, minimum_settled_amount_usd=None):
-    """One decision, at most one submitted proposal.
+def _quote(response, symbol, now):
+    prices = response["prices"]
+    if not isinstance(prices, list):
+        raise StrategyError("Expected prices list")
+    found = [q for q in prices if q["symbol"] == symbol]
+    if len(found) != 1:
+        raise StrategyError("Missing/duplicate symbol quote")
+    quote = found[0]
+    stamp = quote["timestamp_unix"]
+    if (type(stamp) not in (int, float) or not math.isfinite(stamp)
+            or stamp > now + 5 or now - stamp > 120):
+        raise StrategyError("Stale/future quote")
+    if num(quote["price"]) <= 0 or quote.get("model_version") is None:
+        raise StrategyError("Invalid quote")
+    return quote
 
-    Confirmation of market schema, replay formula, counts and minimum rules
-    must precede production use. Missing evidence is always HOLD.
+
+def _portfolio(response, symbol):
+    holdings = response["holdings"]
+    if not isinstance(holdings, list):
+        raise StrategyError("Expected holdings list")
+    positions = [h for h in holdings if h["symbol"] == symbol]
+    if len(positions) > 1:
+        raise StrategyError("Duplicate holdings")
+    cash = num(response["cash_balance"], "cash")
+    held = num(positions[0]["quantity"], "holdings") if positions else num(0)
+    avg = positions[0]["avg_cost"] if positions else None
+    if cash < 0 or held < 0:
+        raise StrategyError("Negative cash/holdings")
+    return cash, held, avg
+
+
+def _remember_response(state, intent_id, reply):
+    """Keep unresolved on missing/ambiguous evidence. Never infer execution."""
+    if (not isinstance(reply, dict)
+            or type(reply.get("transaction_id")) is not int
+            or reply["transaction_id"] <= 0):
+        state.mark_uncertain(intent_id)
+        return {"status": "UNRESOLVED", "intent_id": intent_id,
+                "reason": "Missing transaction identity; reconcile before new proposals"}
+    state.attach_transaction_id(intent_id, reply["transaction_id"])
+    # A BUY/SELL proposal should be PENDING, or a documented logged rejection.
+    if reply.get("status") not in {"PENDING", "REJECTED", "BLOCKED"}:
+        state.mark_uncertain(intent_id)
+        return {"status": "UNRESOLVED", "intent_id": intent_id,
+                "transaction_id": reply["transaction_id"],
+                "reason": "Unexpected proposal response; reconcile"}
+    state.record_outcome(intent_id, reply)
+    return {"status": "PROPOSED" if reply["status"] == "PENDING" else reply["status"],
+            "ledger_status": reply["status"], "intent_id": intent_id,
+            "transaction_id": reply["transaction_id"], "response": reply}
+
+
+def run_trader_cycle(client, llm, state, *, symbol=None, decision_time=None,
+                     replay=None, require_flat_entry=False, submit=True):
+    """At most one proposal. Pass submit=False for a no-write preview.
+
+    Reuse MarketReplay(client) between cycles for descriptor caching.
+    Hind's chosen flat-entry theory needs require_flat_entry=True.
+    Other written custom rules need explicit implementation, not just prompting.
     """
-    symbol = str(symbol).upper()
-    now = decision_time or datetime.now(timezone.utc)
-    if now.tzinfo is None: return {'status':'HOLD','reason':'Timezone missing'}
+    now = decision_time if decision_time is not None else datetime.now(timezone.utc)
     try:
+        if not isinstance(now, datetime) or now.tzinfo is None:
+            raise StrategyError("Timezone-aware decision time required")
         if state.get_unresolved_intents():
-            return {'status':'HOLD','reason':'Earlier order remains unresolved'}
-        policy = _payload(client.get_policy(),'policy')
-        theory = _payload(client.get_theory(),'theory')
-        validate_theory(theory,policy,symbol)
-        # Explicit direct schemas; inspect live Ledger envelopes before enabling.
-        quotes = _payload(client.get_prices(symbol),'prices')
-        quote = quotes[symbol]
-        if not isinstance(quote,dict): raise StrategyError('Unexpected quote schema')
-        price = num(quote['price_usd'],'price_usd')
-        stamp = quote['timestamp_unix']
-        if type(stamp) not in (int,float) or stamp > now.timestamp():
-            raise StrategyError('Bad/future quote timestamp')
-        portfolio = _payload(client.get_portfolio(),'portfolio')
-        cash = portfolio['cash_usd']
-        position = portfolio['positions'][symbol]
-        holding = position['quantity']
-        avg_cost = position.get('avg_cost_usd')
-        counts = _payload(portfolio['trade_counts'],'trade_counts')
-        if any(x not in counts for x in ('executed_last_hour','executed_last_day')):
-            raise StrategyError('Missing execution counts')
-        if (num(counts['executed_last_hour'],'hour count') >= num(policy['max_trades_per_hour'],'hour max') or
-                num(counts['executed_last_day'],'day count') >= num(policy['max_trades_per_day'],'day max')):
-            return {'status':'HOLD','reason':'Trading quota reached'}
-        news_response = client.get_news()
-        if not isinstance(news_response, dict) or not isinstance(news_response.get('news'),list):
-            raise StrategyError('Unexpected news schema')
-        news = news_response['news']
-        descriptor = _payload(client.get_market_model(),'market model')
-        points = reconstruct_prices(descriptor,now,reference_reconstructor)
-        verify_fixtures(points,descriptor.get('fixtures',[]))
-        try:
-            check_current_quote(points,float(price),quote_tolerance_fraction)
-        except MarketDataError:
-            descriptor = _payload(client.get_market_model(),'refreshed market model')
-            points = reconstruct_prices(descriptor,now,reference_reconstructor)
-            verify_fixtures(points,descriptor.get('fixtures',[]))
-            check_current_quote(points,float(price),quote_tolerance_fraction)
-        signals = calculate_signals(points,theory['lookback_minutes'],avg_cost,holding)
-        entry, exits = determine_triggers(theory,signals,holding)
-        signals.update(entry_triggered=entry,exit_triggers=exits,replay_matches_quote=True)
-        expected = 'SELL' if exits else ('BUY' if entry else 'HOLD')
-        if expected=='HOLD': return {'status':'HOLD','reason':'No active strategy trigger'}
-        if expected in [str(a).upper() for a in policy['restricted_actions']]:
-            return {'status':'HOLD','reason':'Action restricted'}
-        # These Ledger-specific execution rules must be provided explicitly by
-        # caller once confirmed from course spec; no guessed defaults for live trades.
-        if quantity_decimal_places is None or minimum_settled_amount_usd is None:
-            raise StrategyError('Instructor quantity precision/minimum required')
-        bounds = quantity_bounds(theory,policy,cash,holding,price,
-                                 quantity_decimal_places,minimum_settled_amount_usd)
-        maximum = bounds['max_buy_quantity' if expected=='BUY' else 'max_sell_quantity']
-        if maximum <= 0: return {'status':'HOLD','reason':'No valid affordable quantity'}
-        context = {'context_version':1,'decision_time_unix':int(now.timestamp()),'symbol':symbol,
-                   'quote':{'price_usd':float(price),'timestamp_unix':stamp,
-                            'model_version':quote.get('model_version')},
-                   'theory':theory,'signals':signals,'policy':policy,'trade_counts':counts,
-                   'portfolio':{'cash_usd':float(num(cash,'cash')),
-                                'symbol_quantity':float(num(holding,'holding')),
-                                'symbol_avg_cost_usd':float(num(avg_cost,'avg cost')) if avg_cost is not None else None},
-                   'bounds':bounds,'execution_state':{'has_unresolved_order':False},'news':news}
-        # Mariyam's adapter validates this full context before calling Muse.
-        from llm_adapter import validate_context
-        validate_context(context,'trader')
+            return _hold("Earlier local order remains unresolved")
+        policy = validate_policy(client.get_policy())
+        if (policy["trades_last_hour"] >= policy["max_trades_per_hour"]
+                or policy["trades_last_day"] >= policy["max_trades_per_day"]):
+            return _hold("Executed trade quota reached")
+        theory = client.get_theory()["theory"]
+        if not isinstance(theory, dict):
+            return _hold("No active submitted theory")
+        selected = theory["selected_symbols"]
+        if not isinstance(selected, list) or len(selected) != 1:
+            raise StrategyError("Each member's theory must select one currency")
+        symbol = selected[0] if symbol is None else symbol
+        validate_theory(theory, policy, symbol)
+        quote = _quote(client.get_prices(symbols=symbol), symbol, now.timestamp())
+        cash, held, avg = _portfolio(client.get_portfolio(), symbol)
+        news = client.get_news()["news"]
+        if not isinstance(news, list):
+            raise StrategyError("Expected news list")
+        replay = replay if replay is not None else MarketReplay(client)
+        points = replay.samples(symbol, quote, theory["lookback_minutes"])
+        signals = calculate_signals(points, theory["lookback_minutes"], avg, held)
+        entry, exits = determine_triggers(theory, signals, held,
+                                          require_flat_entry=require_flat_entry)
+        signals.update(entry_triggered=entry, exit_triggers=exits, replay_matches_quote=True)
+        expected = "SELL" if exits else ("BUY" if entry else "HOLD")
+        if expected == "HOLD":
+            return _hold("No eligible theory trigger")
+        if expected in policy["restricted_actions"]:
+            return _hold("Theory action is restricted")
+        internal_policy = policy_context(policy)
+        bounds = quantity_bounds(theory, internal_policy, cash, held, quote["price"])
+        if bounds["max_buy_quantity" if expected == "BUY" else "max_sell_quantity"] <= 0:
+            return _hold("No affordable/permitted quantity")
+        context = {
+            "context_version": 1, "decision_time_unix": int(now.timestamp()), "symbol": symbol,
+            "quote": {"price_usd": float(num(quote["price"])),
+                      "timestamp_unix": quote["timestamp_unix"], "model_version": quote["model_version"]},
+            "theory": theory, "signals": signals, "policy": internal_policy,
+            "trade_counts": {"executed_last_hour": policy["trades_last_hour"],
+                             "executed_last_day": policy["trades_last_day"]},
+            "portfolio": {"cash_usd": float(cash), "symbol_quantity": float(held),
+                          "symbol_avg_cost_usd": float(num(avg)) if avg is not None else None},
+            "bounds": bounds, "execution_state": {"has_unresolved_order": False}, "news": news
+        }
+        validate_context(context, "trader")
+        # The adapter performs the real model call and schema validation.
         decision = llm.trader_decision(context)
-        proposal = validate_decision(decision,symbol,expected,bounds,price,policy)
-        if proposal is None: return {'status':'HOLD','reason':'AI chose HOLD'}
+        proposal = validate_decision(decision, symbol, expected, bounds, quote["price"], internal_policy)
+        if proposal is None:
+            return _hold("Model chose HOLD")
+    except Cooldown as exc:
+        return {"status": "COOLDOWN", "retry_after": exc.seconds}
     except Exception as exc:
-        # No credential, response body, or untrusted text is copied into result.
-        return {'status':'HOLD','reason':f'Unable to verify safe trade ({type(exc).__name__})'}
-    # Persist BEFORE posting. This follows Hind's exact state-store interface.
-    order = {**proposal, 'theory_id':theory['id']}
+        # Never expose raw provider/server errors, keys, or untrusted text.
+        return _hold(f"Trade could not be verified ({type(exc).__name__})")
+
+    order = {**proposal, "theory_id": theory["id"]}
+    if not submit:
+        return {"status": "PREVIEW", "proposal": order, "theory_version": theory["version"]}
     try:
         state.save_theory_snapshot(theory)
-        intent_id = state.save_proposal_intent(order, theory['version'])
+        intent_id = state.save_proposal_intent(order, theory_version=theory["version"])
         state.mark_submitting(intent_id)
     except Exception:
-        return {'status':'HOLD','reason':'Local intent persistence failed'}
+        return _hold("Persistence failed; no proposal was sent")
     try:
         reply = client.propose_trade(order)
+    except Cooldown as exc:
+        # Conservatively retain this started intent for reconciliation.
+        state.mark_uncertain(intent_id)
+        return {"status": "COOLDOWN", "retry_after": exc.seconds, "intent_id": intent_id,
+                "needs_reconciliation": True}
+    except ApiError as exc:
+        # Ledger may return a logged REJECTED transaction with an HTTP error.
+        body = exc.body
+        if (isinstance(body, dict) and body.get("status") == "REJECTED"
+                and type(body.get("transaction_id")) is int and body["transaction_id"] > 0):
+            return _remember_response(state, intent_id, body)
+        state.mark_uncertain(intent_id)
+        return {"status": "UNRESOLVED", "intent_id": intent_id,
+                "reason": "API write failed; reconcile before another proposal"}
     except Exception:
         state.mark_uncertain(intent_id)
-        return {'status':'UNRESOLVED','intent_id':intent_id,
-                'reason':'POST outcome uncertain; reconciliation required'}
-    if not isinstance(reply,dict) or type(reply.get('transaction_id')) is not int or reply['transaction_id'] <= 0:
-        state.mark_uncertain(intent_id)
-        return {'status':'UNRESOLVED','intent_id':intent_id,
-                'reason':'Missing confirmed transaction ID; reconcile'}
-    state.attach_transaction_id(intent_id,reply['transaction_id'])
-    return {'status':'PROPOSED','intent_id':intent_id,
-            'transaction_id':reply['transaction_id'],'proposal':order}
+        return {"status": "UNRESOLVED", "intent_id": intent_id,
+                "reason": "Proposal response lost; reconcile before another proposal"}
+    # If local persistence now fails, let the runner stop the cycle. The durable
+    # SUBMITTING/PENDING record still prevents a new proposal after restart.
+    result = _remember_response(state, intent_id, reply)
+    result["proposal"] = order
+    return result
