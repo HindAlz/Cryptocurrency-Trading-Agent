@@ -1,5 +1,6 @@
 """Deterministic strategy and money checks. Percent values are percentage points."""
 from dataclasses import asdict, is_dataclass
+from theory_validation import validate_submitted_theory, TheoryValidationError
 from custom_sma import validate_custom, crossover_flags
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR
 
@@ -25,6 +26,10 @@ def num(value, name="number"):
 
 
 def validate_theory(theory, policy, symbol):
+    try:
+        validate_submitted_theory(theory)
+    except TheoryValidationError as exc:
+        raise StrategyError(str(exc)) from None
     if not isinstance(theory, dict) or not isinstance(policy, dict):
         raise StrategyError("Missing theory/policy")
     for field in ("id", "version"):

@@ -14,6 +14,7 @@ from guardian_rules import check_trade, check_theory_compliance, number, normali
 from llm_adapter import validate_guardian_response, validate_context
 from guardian_signals import IndependentSignals
 from custom_sma import crossover_flags
+from theory_validation import validate_submitted_theory, TheoryValidationError
 
 FINAL = {"EXECUTED", "BLOCKED", "REJECTED"}
 
@@ -145,6 +146,10 @@ def assess(order, theory, policy, portfolio, quote, signal_provider,
     hard = check_trade(order, policy, quote["price"], portfolio, theory)
     if hard["decision"] != "PASS":
         return hard, None
+    try:
+        validate_submitted_theory(theory)
+    except TheoryValidationError:
+        return {"decision": "ESCALATE", "rules_triggered": ["INVALID_THEORY_EVIDENCE"]}, None
     if ((require_flat_entry or (isinstance(theory, dict) and theory.get("strategy") == "custom"))
             and order["action"] == "BUY"
             and number(portfolio["symbol_quantity"]) > 0):

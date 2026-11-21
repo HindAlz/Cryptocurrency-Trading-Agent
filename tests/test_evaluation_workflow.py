@@ -44,6 +44,8 @@ def fake_client(clock):
     client.next_allowed = 0
     client.get_theory.return_value = {"theory": deepcopy(THEORY)}
     client.get_policy.return_value = deepcopy(POLICY)
+    client.get_market_model.return_value = {"model": {"version": "test", "epoch_unix": 1799913600,
+        "tick_seconds": 5, "power_timescale_days": 365, "assets": {"BTC": {"power_exponent": .45}}}}
     client.get_portfolio.return_value = {"total_value": 100000, "cash_balance": 100000}
     client.get_prices.side_effect = lambda **kw: {"prices": [{"symbol": "BTC", "price": 80000,
         "timestamp_unix": clock.time(), "model_version": "test"}]}
