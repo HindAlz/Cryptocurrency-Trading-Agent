@@ -30,8 +30,8 @@ def main():
     config = json.loads(path.read_text(encoding="utf-8"))
     client = LedgerClient(config["LEDGER_BASE_URL"], config["TRADER_API_KEY"])
     llm = create_adapter(args.llm_config)
-    if llm.config.provider != "gemini":
-        raise ValueError("This manual verifier requires real Gemini, not mock mode")
+    if llm.config.provider not in {"gemini", "openai"}:
+        raise ValueError("This manual verifier requires real OpenAI or Gemini, not mock mode")
     with StateStore(args.state, args.account) as state:
         result = run_trader_cycle(client, llm, state, symbol=args.symbol,
                                  replay=MarketReplay(client), require_flat_entry=args.flat_entry,

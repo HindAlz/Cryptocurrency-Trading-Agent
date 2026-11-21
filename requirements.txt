@@ -1,2 +1,2 @@
 requests
-openai>=1.40
+openai>=2.0.0

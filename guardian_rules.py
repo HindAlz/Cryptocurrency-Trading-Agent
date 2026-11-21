@@ -1,5 +1,6 @@
 
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR
+from custom_sma import validate_custom, crossover_flags
 
 SUPPORTED = {"BTC", "ETH", "DOGE", "XMR", "XRP", "SOL"}
 
@@ -268,8 +269,9 @@ def check_theory_compliance(
         ):
             violations.append("SYMBOL_NOT_IN_THEORY")
 
-        # Only implement the documented momentum strategy here.
-        if theory["strategy"] not in {"momentum", "mean_reversion"}:
+        if theory["strategy"] == "custom":
+            validate_custom(theory)
+        if theory["strategy"] not in {"momentum", "mean_reversion", "custom"}:
             return {
                 "decision": "ESCALATE",
                 "rules_triggered": ["STRATEGY_NOT_IMPLEMENTED"]
@@ -307,6 +309,10 @@ def check_theory_compliance(
         if action == "BUY":
             if theory["strategy"] == "momentum":
                 entry_met = lookback_return >= threshold
+            elif theory["strategy"] == "custom":
+                entry_met, _ = crossover_flags(theory, signals.get("custom"))
+                if number(portfolio["symbol_quantity"]) > 0:
+                    violations.append("EXISTING_POSITION")
             else:
                 deviation = Decimal(str(signals["mean_deviation_pct"]))
                 if not deviation.is_finite():
@@ -351,6 +357,8 @@ def check_theory_compliance(
 
             if theory["strategy"] == "momentum":
                 momentum_sell = lookback_return <= -threshold
+            elif theory["strategy"] == "custom":
+                _, momentum_sell = crossover_flags(theory, signals.get("custom"))
             else:
                 deviation = Decimal(str(signals["mean_deviation_pct"]))
                 if not deviation.is_finite():
@@ -380,4 +388,5 @@ def check_theory_compliance(
         "decision": "BLOCK" if violations else "PASS",
         "rules_triggered": violations
     }
+
 

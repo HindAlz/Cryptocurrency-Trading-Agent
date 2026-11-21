@@ -68,7 +68,7 @@ class IndependentSignals:
                        for i in range(61)]
             if abs(Decimal(str(samples[-1])) - Decimal(str(quote["price"]))) > Decimal("0.00000001"):
                 continue
-            return {
+            result = {
                 "lookback_return_pct": (quote["price"] / samples[0] - 1) * 100,
                 "mean_deviation_pct": (quote["price"] / (sum(samples) / 61) - 1) * 100,
                 "return_since_avg_cost_pct": None,
@@ -76,4 +76,9 @@ class IndependentSignals:
                 "exit_triggers": [],
                 "replay_matches_quote": True
             }
+            if theory["strategy"] == "custom":
+                from custom_sma import calculate_custom
+                result["custom"] = calculate_custom(model, order["symbol"], quote, theory)
+            return result
         raise ValueError("Descriptor/replay disagrees with quote after refresh")
+

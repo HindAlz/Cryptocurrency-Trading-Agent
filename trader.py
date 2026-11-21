@@ -102,6 +102,9 @@ def run_trader_cycle(client, llm, state, *, symbol=None, decision_time=None,
         replay = replay if replay is not None else MarketReplay(client)
         points = replay.samples(symbol, quote, theory["lookback_minutes"])
         signals = calculate_signals(points, theory["lookback_minutes"], avg, held)
+        if theory["strategy"] == "custom":
+            from custom_sma import calculate_custom
+            signals["custom"] = calculate_custom(replay.model, symbol, quote, theory)
         entry, exits = determine_triggers(theory, signals, held,
                                           require_flat_entry=require_flat_entry)
         signals.update(entry_triggered=entry, exit_triggers=exits, replay_matches_quote=True)
@@ -183,3 +186,4 @@ def run_trader_cycle(client, llm, state, *, symbol=None, decision_time=None,
     result = _remember_response(state, intent_id, reply)
     result["proposal"] = order
     return result
+
