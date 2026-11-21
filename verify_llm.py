@@ -1,4 +1,4 @@
-"""Verify real Gemini connectivity using synthetic context data.
+"""Verify real OpenAI or Gemini connectivity using synthetic context data.
 
 No Ledger proposals or reviews are submitted.
 The examples are not live trading evidence.
@@ -107,8 +107,8 @@ def main():
     try:
         llm = create_adapter("config.llm.local.json")
 
-        if llm.config.provider != "gemini":
-            print("Real verification requires provider=gemini.")
+        if llm.config.provider not in {"gemini", "openai"}:
+            print("Real verification requires provider=openai or provider=gemini.")
             return 1
 
         print(f"Provider: {llm.config.provider}")
@@ -127,7 +127,7 @@ def main():
         print(f"Verification failed ({type(exc).__name__}): {exc}")
         return 1
 
-    print("OK: both real Gemini calls returned validated responses.")
+    print(f"OK: both real {llm.config.provider} calls returned validated responses.")
     return 0
 
 
