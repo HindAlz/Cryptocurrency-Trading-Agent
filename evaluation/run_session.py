@@ -128,9 +128,15 @@ def run_evaluation(client, *, root, folder, args, metadata, deadline,
     before["account_label"] = args.account
     save_json(folder / "before.json", before)
     policy = client.get_policy()
+    market_model = client.get_market_model()["model"]
+    if not isinstance(market_model, dict):
+        raise ValueError("Invalid public market descriptor")
+    save_json(folder / "market_model.json", {"model": market_model,
+                                          "received_at_unix": time.time()})
     theory = before["records"]["theory"]["response"]["theory"]
     metadata = {**metadata, "theory_snapshot": theory, "policy_start": policy,
-                "submit_enabled": args.submit, "runner_duration_seconds": args.duration}
+                "submit_enabled": args.submit, "runner_duration_seconds": args.duration,
+                "market_generator": market_model}
     recorder = SessionRecorder(folder, member=args.member, account_label=args.account,
         symbol=before["symbol"], theory_id=before["theory_id"],
         theory_version=before["theory_version"], sampling_interval_seconds=args.sample_interval,

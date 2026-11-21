@@ -93,7 +93,10 @@ def run_trader_cycle(client, llm, state, *, symbol=None, decision_time=None,
         if not isinstance(selected, list) or len(selected) != 1:
             raise StrategyError("Each member's theory must select one currency")
         symbol = selected[0] if symbol is None else symbol
-        validate_theory(theory, policy, symbol)
+        try:
+            validate_theory(theory, policy, symbol)
+        except StrategyError as exc:
+            return _hold(f"Invalid theory: {exc}")
         quote = _quote(client.get_prices(symbols=symbol), symbol, now.timestamp())
         cash, held, avg = _portfolio(client.get_portfolio(), symbol)
         news = client.get_news()["news"]
