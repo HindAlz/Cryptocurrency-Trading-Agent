@@ -103,6 +103,9 @@ def build_report(records, evidence=None):
         result["limitations"].append("Missing paired quotes: buy-and-hold benchmark not calculated.")
 
     if evidence is not None:
+        # Prevent accidentally combining a session with another account export.
+        if evidence.get("account_label") != start["account_label"]:
+            raise ValueError("Evidence account_label must match the recorded session")
         records_by_name = evidence["records"]
         rows = records_by_name["transactions"]["response"]["transactions"]
         logs = records_by_name["guardian_logs"]["response"]["guardian_logs"]

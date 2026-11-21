@@ -70,7 +70,7 @@ def rows():
 
 
 def evidence(transactions=None, logs=None, truncated=False):
-    return {"history_may_be_truncated": truncated, "records": {
+    return {"account_label": "hind-btc", "history_may_be_truncated": truncated, "records": {
         "transactions": {"response": {"transactions": transactions or []}},
         "guardian_logs": {"response": {"guardian_logs": logs or []}}}}
 
