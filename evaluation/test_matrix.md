@@ -1,6 +1,6 @@
 # Testing and Evaluation Matrix
 
-## Initial Verification
+## Initial Verification — historical status as of 19 November 2026
 - Date: 19 November 2026
 - Branch: member5-testing-evaluation
 - Existing offline LLM adapter tests: 71 passed
@@ -10,6 +10,10 @@ Command:
 python -m pytest tests/test_llm_adapter.py -v
 
 ## Planned Tests
+
+The statuses below reflect the original plan, not the final team verification status. Tests marked “Not run” have not been individually verified in this matrix. Team security evidence is documented separately. 
+
+The DOGE sessions below demonstrate executed trades but do not, by themselves, verify every planned test.
 
 Member 5 coordinates testing and records evidence.
 Each component owner fixes and verifies their own code.
@@ -49,11 +53,27 @@ Do not include API keys or private configuration.
 - Sample portfolio value at a documented interval.
 - Calculate portfolio return and maximum drawdown.
 - Compare with cash and, where meaningful, buy-and-hold.
-- Report blocks, modifications, escalations, model failures, outages,
-  and unresolved orders separately.
+- Report blocks, modifications, escalations, model failures, outages, and unresolved orders separately.
 - Respect quotas and explain any shortfall without forcing trades.
 
 ## Interpretation Limits
 
 Passing offline adapter tests does not establish live trading correctness
 or real-provider prompt-injection resistance.
+
+## General technical verification — 22 November 2026
+
+- Full offline suite: 401 tests and 163 subtests passed.
+- These automated checks do not establish live trading results for every team member or currency.
+- Security simulation evidence is documented separately by the team.
+
+## Member 5 DOGE evaluation — 22 November 2026
+
+- Ledger connection and Trader/Guardian model checks succeeded.
+- Completed six recorded DOGE evaluation sessions.
+- Six executed trades: BUY #201, SELL #202, BUY #203, SELL #204, BUY #205 and BUY #206.
+- BUY #200 was blocked with BUY_SIGNAL_NOT_TRIGGERED.
+- All six recordings completed without recorded sampling or evidence errors, and ended with no unresolved orders.
+- Portfolio value at the end of Session 6: $100,066.44.
+- DOGE remained held at the end; its value can change afterward.
+- Session reports, sample CSVs and Ledger screenshots are documented in the shared results and supplied separately.
