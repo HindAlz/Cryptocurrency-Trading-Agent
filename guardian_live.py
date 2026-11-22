@@ -322,10 +322,20 @@ def review_pending_live(client, llm, state, signal_provider=None, *,
             payload = validated_review(order, raw)
         except Cooldown:
             raise
-        except Exception:
-            # Construct a valid escalation even if other order fields were malformed.
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Guardian review failed for transaction %s: %s",
+                tid,
+                type(exc).__name__
+                )
+
+            # Preserve fail-safe escalation.
             order = {"transaction_id": tid}
-            payload = {"transaction_id": tid, **escalation("EVIDENCE_OR_MODEL_UNAVAILABLE")}
+            payload = {
+                "transaction_id": tid,
+                **escalation("EVIDENCE_OR_MODEL_UNAVAILABLE")
+            }
         if payload["decision"] in {"APPROVE", "MODIFY"}:
             response = recheck_and_submit(client, order, payload, theory, signal_provider,
                                           clock=clock, require_flat_entry=require_flat_entry)
