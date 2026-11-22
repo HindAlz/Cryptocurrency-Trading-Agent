@@ -262,13 +262,13 @@ def main(argv=None):
             result = bind_confirmed_transaction(guardian or trader, state, args.bind_intent, args.transaction_id)
             log_event(log_path, "explicit_local_binding", result=result)
             return 0
-        # Preview trader still calls Gemini. Guardian read-only inspection does not.
+        # Preview trader still calls the configured model. Guardian read-only inspection does not.
         needs_model = args.mode in {"both", "trader"} or (args.submit and args.mode in {"guardian", "review"})
         llm = None
         if needs_model:
             adapter = create_adapter(args.llm_config)
-            if adapter.config.provider != "gemini":
-                raise ValueError("Runner requires real Gemini; mock mode is only for offline tests")
+            if adapter.config.provider not in {"gemini", "openai"}:
+                raise ValueError("Runner requires real OpenAI or Gemini; mock mode is only for offline tests")
             llm = BoundedModel(adapter, deadline)
         replay = MarketReplay(trader) if trader is not None else None
         signals = IndependentSignals(guardian) if guardian is not None else None

@@ -92,6 +92,8 @@ class ModelConfig:
     timeout_seconds: float = 30.0
     max_retries: int = 0
     api_key_env: str = "GEMINI_API_KEY"
+    reasoning_effort: str = "low"
+    max_output_tokens: int = 4096
 
     @classmethod
     def from_file(cls, path):
@@ -117,7 +119,9 @@ class ModelConfig:
             "base_url",
             "timeout_seconds",
             "max_retries",
-            "api_key_env"
+            "api_key_env",
+            "reasoning_effort",
+            "max_output_tokens"
         }
 
         if set(data) - allowed:
@@ -137,8 +141,8 @@ class ModelConfig:
 
 
 def create_adapter(config_path=None, provider=None):
-    if provider not in {None, "mock", "gemini"}:
-        raise ValueError("Provider must be gemini or mock.")
+    if provider not in {None, "mock", "gemini", "openai"}:
+        raise ValueError("Provider must be openai, gemini, or mock.")
 
     if config_path is None:
         if provider == "mock":
@@ -458,21 +462,30 @@ class ModelAdapter:
         if not isinstance(config, ModelConfig):
             raise ValueError("Pass an explicit ModelConfig.")
 
-        if config.provider not in {"mock", "gemini"}:
-            raise ValueError("Provider must be gemini or mock.")
+        if config.provider not in {"mock", "gemini", "openai"}:
+            raise ValueError("Provider must be openai, gemini, or mock.")
 
         if config.provider != "mock":
             if not isinstance(config.model, str) or not config.model.strip():
-                raise ValueError("Specify the Gemini model.")
+                raise ValueError("Specify the model ID.")
 
-            expected_url = (
-                "https://generativelanguage.googleapis.com/v1beta/openai"
-            )
+            expected_urls = {
+                "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
+                "openai": "https://api.openai.com/v1",
+            }
             if (
                 not isinstance(config.base_url, str)
-                or config.base_url.rstrip("/") != expected_url
+                or config.base_url.rstrip("/") != expected_urls[config.provider]
             ):
-                raise ValueError("Use the Gemini OpenAI-compatible base URL.")
+                raise ValueError("Use the canonical API base URL for this provider.")
+
+        if (
+            not isinstance(config.reasoning_effort, str)
+            or config.reasoning_effort not in {"low", "medium", "high", "xhigh", "max"}
+        ):
+            raise ValueError("Use a supported reasoning_effort; none is not supported by Sol.")
+        if type(config.max_output_tokens) is not int or not 256 <= config.max_output_tokens <= 8192:
+            raise ValueError("max_output_tokens must be an integer between 256 and 8192.")
 
         if (
             not _number(config.timeout_seconds)
@@ -588,6 +601,9 @@ class ModelAdapter:
         })
 
     def _call_provider(self, *, kind, system, payload):
+        if self.config.provider == "openai":
+            return self._call_openai(kind=kind, system=system, payload=payload)
+
         try:
             from openai import OpenAI
         except ImportError:
@@ -648,6 +664,90 @@ class ModelAdapter:
             raise LLMValidationError("Gemini returned empty/non-text output.")
 
         return content
+
+
+    def _call_openai(self, *, kind, system, payload):
+        """One stateless, schema-constrained Sol request. No tools or Ledger keys."""
+        try:
+            from openai import OpenAI
+        except ImportError:
+            raise LLMProviderError(
+                "Install dependencies: python -m pip install --upgrade openai"
+            ) from None
+
+        schema = TRADER_SCHEMA if kind == "trader" else GUARDIAN_SCHEMA
+        key = self.config.api_key()
+        try:
+            with OpenAI(
+                api_key=key,
+                base_url=self.config.base_url,
+                timeout=self.config.timeout_seconds,
+                max_retries=0,
+            ) as client:
+                response = client.responses.create(
+                    model=self.config.model,
+                    input=[
+                        {"role": "developer", "content": system},
+                        {"role": "user", "content": payload},
+                    ],
+                    reasoning={"effort": self.config.reasoning_effort},
+                    text={"format": {
+                        "type": "json_schema",
+                        "name": f"{kind}_decision",
+                        "strict": True,
+                        "schema": schema,
+                    }},
+                    max_output_tokens=self.config.max_output_tokens,
+                    store=False,
+                )
+        except Exception as exc:
+            raise LLMProviderError(
+                f"OpenAI request failed ({type(exc).__name__}). "
+                "Check the SDK version, API key, model access, quota, and connectivity."
+            ) from None
+
+        if (
+            getattr(response, "status", None) != "completed"
+            or getattr(response, "error", None) is not None
+            or getattr(response, "incomplete_details", None) is not None
+        ):
+            raise LLMProviderError("OpenAI response was not successfully completed.")
+
+        output = getattr(response, "output", None)
+        if not isinstance(output, list) or not output:
+            raise LLMProviderError("OpenAI returned no output items.")
+
+        messages = []
+        for item in output:
+            item_type = getattr(item, "type", None)
+            if item_type == "reasoning":
+                continue
+            if item_type != "message":
+                raise LLMProviderError("OpenAI returned an unexpected output item.")
+            if (
+                getattr(item, "role", None) != "assistant"
+                or getattr(item, "status", None) != "completed"
+            ):
+                raise LLMProviderError("OpenAI returned an incomplete assistant message.")
+            messages.append(item)
+
+        if len(messages) != 1:
+            raise LLMProviderError("OpenAI must return exactly one decision message.")
+        content = getattr(messages[0], "content", None)
+        if not isinstance(content, list) or not content:
+            raise LLMValidationError("OpenAI returned empty/non-text output.")
+        parts = []
+        for part in content:
+            part_type = getattr(part, "type", None)
+            if part_type == "refusal":
+                raise LLMProviderError("OpenAI refused the request.")
+            if part_type != "output_text" or not isinstance(getattr(part, "text", None), str):
+                raise LLMValidationError("OpenAI returned unexpected message content.")
+            parts.append(part.text)
+        raw = "".join(parts)
+        if not raw.strip() or len(raw.encode("utf-8")) > 100000:
+            raise LLMValidationError("OpenAI returned empty or oversized output.")
+        return raw
 
 
 ModelAdapterFactory = create_adapter

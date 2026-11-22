@@ -29,7 +29,7 @@ def setup_session(tmp_path, monkeypatch):
 
 def test_records_timed_samples(setup_session, capsys):
     client, _ = setup_session
-    client.get_portfolio.side_effect = [{"total_value": value} for value in [100, 120, 90, 110]]
+    client.get_portfolio.side_effect = [{"total_value": value} for value in [100, 120, 90, 110, 110]]
 
     path = record_session(
         client,
@@ -46,9 +46,9 @@ def test_records_timed_samples(setup_session, capsys):
                for r in records
                if r["event"] == "portfolio_sample"]
 
-    assert samples == [100, 120, 90, 110]
+    assert samples == [100, 120, 90, 110, 110]
     assert records[-1]["event"] == "session_end"
-    assert client.get_portfolio.call_count == 4
+    assert client.get_portfolio.call_count == 5
 
     output = capsys.readouterr().out
     assert "return: 10.00%" in output
@@ -70,7 +70,7 @@ def test_read_failure_preserves_collected_samples(setup_session):
             interval=15,
         )
 
-    path = next((folder / "evaluation/results").glob("*.jsonl"))
+    path = next((folder / "runtime/evaluation").glob("*.jsonl"))
     records = [json.loads(line)
                for line in path.read_text(encoding="utf-8").splitlines()]
 

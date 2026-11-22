@@ -1,316 +1,135 @@
-# Team setup: run the agents on your own Ledger account
+# Cryptocurrency Trading Agent
 
-These instructions use **Windows Command Prompt** and the shared repository:
-https://github.com/HindAlz/Cryptocurrency-Trading-Agent
+The Trader proposes trades using your submitted theory. The Guardian independently checks each proposal before Ledger can execute it.
 
-Each member runs the same code using their **own Ledger account, assigned currency, submitted theory, keys, and local state**. You do not need to edit Python files to change your currency. The trader reads the single currency in your active theory.
+Each teammate uses their **own Ledger account, assigned currency, theory, API keys and local state**. Ledger trades use simulated money. 
 
-> Copy only commands inside code blocks, one line at a time. Do not copy terminal prompts such as `(.venv) C:\...>`.
+These instructions use **Windows Command Prompt**. Copy commands one line at a time.
 
-## 1. Prepare your Ledger account
+## 1. Update and install
 
-1. Open https://ledger.chanyeun.com and register/sign in using your `@ku.ac.ae` account.
-2. Confirm your assigned currency. The five members must cover five distinct currencies.
-3. Open **Security Policy**:
-   - Enable your assigned currency only.
-   - Permit BUY and SELL; keep WITHDRAW restricted.
-   - Set the transaction ceiling, hourly/day limits, and escalation threshold agreed for your experiment.
-   - Put the escalation threshold below the hard transaction ceiling if demonstrating size-based escalation.
-4. Open **Theory Submission**:
-   - Select your assigned currency only.
-   - Complete the hypothesis, entry, exit, and risk rules.
-   - Select **momentum** or **mean_reversion**. Custom strategies are not implemented in the shared code.
-   - Enter lookback, threshold, cash fraction, stop loss, and take profit settings that match your written rules.
-   - Click **Submit and activate**. Saving a draft is insufficient.
-5. Record your theory ID/version and policy settings for the report. 
-6. Open **API Keys** and create two keys:
-   - Trader key with scope **trader**.
-   - Guardian key with scope **guardian**.
-7. Save the complete keys privately when shown. Do not use a full-scope key.
-
-## 2. Get the shared code
-
-If you already have the repository, open Command Prompt inside its folder. Preserve/commit any unfinished local work before switching branches. Then:
+From your existing project folder, after preserving any unfinished changes:
 
 ```bat
-git fetch origin
 git switch main
 git pull --ff-only origin main
+.venv\Scripts\activate
+python -m pip install --upgrade -r requirements.txt
+python -m pip install pytest
 ```
 
-Record the code version used:
+Wait until installation finishes. The evaluation commands below require the evaluation pull request to be merged into `main`.
 
-```bat
-git rev-parse HEAD
-```
+## 2. Prepare your Ledger account
 
-## 3. activate your python environment
+On [Ledger](https://ledger.chanyeun.com):
 
-## 4. Add your private Ledger configuration
+1. Enable your assigned currency in **Security Policy** and set your agreed limits.
+2. Submit and activate your theory with that currency selected. A draft is insufficient.
+3. Create separate **trader-scoped** and **guardian-scoped** API keys.
 
-For first-time setup only:
+For first-time configuration:
 
 ```bat
 copy config.ledger.example.json config.local.json
 notepad config.local.json
 ```
 
-If `config.local.json` already exists, **edit it rather than copying over your keys**.
+Fill in the Ledger base URL and your two complete role keys. **Keep an existing working configuration rather than copying over it.**
 
-Enter your own values:
+## 3. Choose one model provider
 
-```json
-{
-  "LEDGER_BASE_URL": "https://ledger.chanyeun.com/api/v1",
-  "TRADER_API_KEY": "YOUR_COMPLETE_TRADER_KEY",
-  "GUARDIAN_API_KEY": "YOUR_COMPLETE_GUARDIAN_KEY"
-}
-```
+Both agents use `config.llm.local.json`. Keep your existing working settings, or choose one option below.
 
-Keep quotation marks, commas, and braces as shown. Do not add comments inside JSON.
-
-Check that Git ignores this file:
+**OpenAI GPT-6.2 Sol:**
 
 ```bat
-git check-ignore config.local.json
+copy config.openai.example.json config.llm.local.json
+set "OPENAI_API_KEY=YOUR_ACTUAL_OPENAI_KEY"
 ```
 
-It should print `config.local.json`. Do not commit this file or send it to teammates. If a key leaks, revoke and replace it.
+Create your key at [OpenAI API keys](https://platform.openai.com/api-keys).
 
-Combined mode loads both role keys. Separate role processes may use separate config files containing only their own role key; the clients still use separate scopes in either arrangement.
-
-## 5. Configure Gemini
-
-Create/view your own Gemini API key in Google AI Studio:
-https://aistudio.google.com/apikey
-
-For first-time model setup:
+**Gemini:**
 
 ```bat
-copy config.llm.example.json config.llm.local.json
-notepad config.llm.local.json
-```
-
-Keep the existing file if you have already configured it. Use the exact model ID verified by the team. The model used successfully in my development runs was `gemini-3.5-flash-lite`; report an unavailable-model error rather than guessing a replacement during final evaluation.
-
-```json
-{
-  "provider": "gemini",
-  "model": "gemini-3.5-flash-lite",
-  "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-  "api_key_env": "GEMINI_API_KEY",
-  "timeout_seconds": 30,
-  "max_retries": 0
-}
-```
-
-Set the actual key in the **same Command Prompt window**:
-
-```bat
+copy config.gemini.example.json config.llm.local.json
 set "GEMINI_API_KEY=YOUR_ACTUAL_GEMINI_KEY"
 ```
 
-Check availability without displaying it:
+Create your key at [Google AI Studio](https://aistudio.google.com/apikey). Use a model your account can access; the template contains the model verified during development.
+
+Replace the key placeholder locally. `set` applies to the current terminal. For future terminals, save the key through Windows **Edit environment variables for your account**, then reopen your terminal or VS Code.
+
+Keep real keys, private configurations and runtime files out of GitHub, screenshots and the Google Doc.
+
+## 4. Check setup
 
 ```bat
-python -c "import os; print('Key found' if os.getenv('GEMINI_API_KEY', '').strip() else 'Key missing')"
-```
-
-For future terminals, either repeat the `set` command privately or save a **user environment variable** through Windows' “Edit environment variables for your account” dialog. Restart VS Code/Command Prompt after saving it there. The variable name is `GEMINI_API_KEY`; its value is your key.
-
-Check that the model config is ignored:
-
-```bat
-git check-ignore config.llm.local.json
-```
-
-The Gemini key is different from both Ledger keys. Do not put any real key into code, model prompts, screenshots, GitHub, or shared evidence.
-
-## 6. Choose your stable account label and entry option
-
-Set a label for your account. This is a local label, not your Ledger login or key. Example for Member 2 assigned XRP:
-
-```bat
-set "LEDGER_ACCOUNT=member2-xrp"
-```
-
-Replace `member2-xrp` with your own agreed label. Use only letters, digits, underscores, and hyphens. Keep the same label and state file for all future runs on this account.
-
-If your submitted theory says **do not buy more while already holding the currency**, set:
-
-```bat
-set "ENTRY_OPTION=--flat-entry"
-```
-
-Otherwise, leave the optional restriction disabled:
-
-```bat
-set "ENTRY_OPTION="
-```
-
-Choose **one** of those ENTRY_OPTION commands. Do not run both unintentionally. The examples below expand `%ENTRY_OPTION%` automatically.
-
-These two variables are terminal-session settings. Re-enter them when opening a new Command Prompt. Do not change the account label to bypass unresolved work.
-
-The commands use the existing default state file `runtime\ledger_state.sqlite3`. Both trader and Guardian must use the same file and account label. Keep your state file: it contains theory snapshots and unresolved-order records. Never delete it to clear a trading block. Do not run another computer against the same Ledger account.
-
-## 7. Verify connections and tests
-
-Check Guardian access to the real Ledger policy:
-
-```bat
+python -m pytest tests -q
 python test_connection.py
-```
-
-This is read-only. It should print your policy JSON, not credentials.
-
-Verify real Gemini calls for both roles:
-
-```bat
 python verify_llm.py
 ```
 
-This uses synthetic example data and submits no Ledger orders. It is not a check of your personal theory or evidence of a real fill.
+Tests run offline. `test_connection.py` reads your Ledger policy. `verify_llm.py` makes two real model calls using sample data; it does not place trades or test your personal theory.
 
-Run the offline tests:
+Resolve any failures before continuing.
 
-```bat
-python -m pip install pytest
-python -m pytest -q
-```
+## 5. Run with portfolio sampling
 
-Save the test summary and any errors. Test counts may change as the team adds cases; investigate failures rather than requiring a particular count.
+**Replace `label` and `Name` below with your existing account label and your name.** Keep using the same label and state database as your earlier runs.
 
-## 8. Preview your own account without trading
-
-First inspect pending orders:
+First, run a short preview:
 
 ```bat
-python run_guardian_once.py --account "%LEDGER_ACCOUNT%" %ENTRY_OPTION%
+python -m evaluation.run_session --account label --member "Name" --duration 90
 ```
 
-Then preview the trader:
+This collects samples and previews decisions without enabling Ledger trades.
+
+After it succeeds, run a measured trading session:
 
 ```bat
-python run_trader_once.py --account "%LEDGER_ACCOUNT%" %ENTRY_OPTION%
+python -m evaluation.run_session --account label --member "Name" --submit --duration 360 --sample-interval 15
 ```
 
-Neither command submits trades or reviews without `--submit`. The trader preview may call Gemini. It returns:
+- `--submit` enables proposals and Guardian reviews on your simulated account.
+- Add `--flat-entry` if your theory prohibits buying more while holding. 
+- This command starts the agents and sampler together. **Do not run another agent process alongside it.**
+- Keep the terminal open. HOLD and zero-trade sessions are normal possible results.
+- Keep theory, policy, model and schedule fixed during final evaluation; record any changes separately.
 
-| Output | Meaning |
-| --- | --- |
-| `PREVIEW` with BUY or SELL | A candidate passed the trader's checks; nothing was submitted |
-| `HOLD: No eligible theory trigger` | No qualifying entry/exit under current conditions, or optional flat-entry rule prevents another BUY |
-| Other `HOLD` reason | Inspect the reason; it may indicate missing theory, permissions, data, or a model/validation problem |
-| `COOLDOWN` | Wait at least the stated cooldown; do not repeatedly retry |
-| Unresolved-order message | Investigate/reconcile earlier work before another proposal |
+The default agent budget is six minutes, leaving time for setup and final data collection. Keep each live session within the course's ten-minute limit. Stop-loss and take-profit checks run only while the agent is running.
 
-PREVIEW is not guaranteed execution. Quotes and policy can change before Guardian review. Do not lower thresholds or weaken checks just to get activity.
+## 6. Save your results
 
-## 9. Run one controlled combined cycle
-
-Before first live use:
-
-- Note cash, holdings, and total portfolio value on Ledger.
-- Confirm you have no unexplained pending/escalated orders.
-- Confirm the preview candidate is affordable and fits your actual theory.
-- Check the active theory ID/version and selected currency.
-
-Run:
-
-```bat
-python main.py --account "%LEDGER_ACCOUNT%" --mode both --once %ENTRY_OPTION% --submit
-```
-
-**This enables actual simulated-account writes.** It processes outstanding orders, checks for a new candidate, proposes at most one trade, and reviews the new order.
-
-Interpret the result:
-
-| Result | Action |
-| --- | --- |
-| `HOLD` | No new proposal; valid if no trigger. If the concise summary hides the reason, use the trader preview again |
-| `PROPOSED` / `PENDING` | A proposal exists; inspect the following Guardian outcome or dashboard |
-| Guardian `EXECUTED` with `fill` | A trade completed; verify Transactions, Guardian Log, and actual portfolio change |
-| `BLOCKED` / `REJECTED` | No fill for that order; record the reason. These do not count toward completed trades |
-| `ESCALATED` | Use Ledger's Escalations page to review the request; do not blindly approve |
-| `UNCERTAIN` / `UNRESOLVED` | Stop new submissions and follow recovery below |
-
-Compare dashboard records and balances with the output. Save transaction ID, executed quantity, price, total, theory version, and Guardian decision.
-
-Do not separately submit with the trader-only script for this combined test. Do not run multiple runners/standalone scripts concurrently on one account.
-
-## 10. Run an autonomous evaluation session
-
-Start this only after your single-cycle test is understood and your session recording/portfolio sampling is ready.
-
-
-```bat
-python main.py --account "%LEDGER_ACCOUNT%" --mode both %ENTRY_OPTION% --submit --interval 60 --duration 540
-```
-
-Without `--once`, the system repeatedly makes its own trading/review decisions. It waits at least 60 seconds after each cycle, respects longer cooldowns, and adds jitter. You do not need to manually choose each BUY/SELL. Human escalations still need attention.
-
-The 540-second session budget and stopping margins are designed to stay within the course's **10-minute maximum per session**. Watch actual start/end timestamps; press **Ctrl+C** if necessary. Do not leave it running in another terminal or launch overlapping sessions.
-
-The program runs locally and stops when the process/terminal stops. Multiple short sessions are permitted, but hourly/daily execution quotas are rolling and do not reset when you restart.
-
-Expect HOLDs and occasional legitimate blocks. A 1% BUY sizing reserve leaves room for price movement, but does not guarantee approval or execution.
-
-## 11. Note evaluation evidence on the Google Doc
-
-For every session, record:
-
-- Your name, account identifier and assigned currency; never credentials.
-- Git commit, active theory ID/version, and policy settings.
-- Session start/end and timezone. Runner logs use UTC; record the dashboard timezone rather than assuming it matches.
-- Starting/ending cash, holdings and total portfolio value.
-- Executed BUY/SELL records with transaction IDs and fills.
-- Blocks, modifications, rejections, escalations, errors and unresolved work separately.
-- A short explanation of the BUY, SELL and HOLD decisions.
-
-Coordinate with Member 5 to sample portfolio value at a fixed documented interval, including starting and ending values. **Runner logs alone do not contain a complete portfolio-value curve.** Starting/ending values alone are insufficient to measure maximum drawdown reliably. Keep sample timestamps and values for the metrics and matching benchmarks.
-
-The runner writes logs such as:
+Look for the printed output folder under:
 
 ```text
-runtime/member2-xrp_runner.jsonl
+runtime\evaluation\
 ```
 
-Note on the Google Doc: sanitized session records, relevant logs and dashboard evidence. Do not share your private configs, raw keys, or entire runtime database.
+Each run saves portfolio samples, agent logs, before/after Ledger evidence and:
 
-The team needs at least **20 EXECUTED BUY/SELL fills in total**, with trades/results covering all five assigned currencies. One BUY and one SELL count as two. Four each is a planning target, not a per-person guide requirement. HOLD, blocked, rejected, pending and escalated entries do not count. Respect the theory and limits; explain any shortfall rather than forcing trades.
+- **`.report.json`** — portfolio return, sampled maximum drawdown, cash/buy-and-hold comparisons, fills and other outcomes.
+- **`.samples.csv`** — timestamped portfolio values and paired prices.
 
-## 12. Recovery and common problems
+Check **`Recording complete: True`** and read the report's warnings. Incomplete runs keep their evidence and provisional metrics. Drawdown uses the samples collected; starting/ending balances alone cannot establish it. Benchmark assumptions and separate quote/portfolio observation times are documented in the report.
 
-### Uncertain or unresolved order
+Confirm completed trades using Ledger's **Transactions** and **Guardian Log**. Only `EXECUTED` orders with fills count as completed trades.
 
-Stop new submissions. Read/reconcile known outcomes:
+**Note on the Google Doc:**
+use the template provided
+
+## 7. If something fails
+
+- **Missing model key:** set the selected provider's environment variable in this terminal.
+- **HOLD:** inspect the recorded reason where available. A later preview can have a different result because it uses fresh data.
+- **Incomplete recording:** keep the files and report the warnings; do not invent missing samples.
+- **Pending, uncertain or unresolved work:** check Ledger and reconcile before another trading run:
 
 ```bat
-python main.py --account "%LEDGER_ACCOUNT%" --mode recover
+python main.py --account label --mode recover
 ```
 
-This makes no Ledger POST. Known IDs are checked against recent history. Unknown IDs and missing entries intentionally remain unresolved. Note on the Google Doc: the intent ID, transaction ID if present, and status—no secrets. Explicit local binding is an investigation tool; do not guess IDs, delete state, or blindly resend an order.
-
-### Position-fraction block
-
-The current cost exceeded cash times the per-BUY fraction. Price movement between checks can cause this. Preserve the block as evidence; do not increase safety limits to bypass it. The shared trader includes a planning reserve, but Guardian limits remain authoritative.
-
-### SELL_SIGNAL_NOT_TRIGGERED
-
-The Guardian's fresh data did not support a SELL. The price may have moved back across a trigger. No sale completed. Wait for a valid signal and preview later.
-
-### No API key / 401 / 403
-
-Check your local Gemini environment variable, complete original Ledger keys, and role scopes. Use the real trader key for proposals and Guardian key for reviews. Never paste credentials into an error report.
-
-
-### Clock/replay disagreement
-
-Keep your Windows clock synchronized. The code checks fresh quote age and matches replay against the quote timestamp. A mismatch refreshes once and then HOLDs/escalates rather than using unreliable evidence.
-
-### A role lock is held
-
-Check for another active `main.py` process on the same account. Stop that process cleanly rather than starting another runner. A leftover lock filename does not itself mean the OS lock is still held.
-
-
+Use your own existing account label. Keep `runtime/`: it contains your trading state, theory snapshots and evaluation evidence. Never delete state or change labels to bypass unresolved orders.

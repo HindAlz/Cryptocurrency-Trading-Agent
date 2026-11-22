@@ -68,7 +68,7 @@ def main():
             client.session.close()
 
         snapshot["account_label"] = args.account
-        folder = Path("evaluation/results")
+        folder = Path("runtime/evaluation")
         folder.mkdir(parents=True, exist_ok=True)
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")

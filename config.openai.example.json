@@ -1,0 +1,10 @@
+{
+  "provider": "openai",
+  "model": "gpt-6.2-sol",
+  "base_url": "https://api.openai.com/v1/",
+  "api_key_env": "OPENAI_API_KEY",
+  "timeout_seconds": 30,
+  "max_retries": 0,
+  "reasoning_effort": "low",
+  "max_output_tokens": 4096
+}

@@ -93,7 +93,10 @@ def run_trader_cycle(client, llm, state, *, symbol=None, decision_time=None,
         if not isinstance(selected, list) or len(selected) != 1:
             raise StrategyError("Each member's theory must select one currency")
         symbol = selected[0] if symbol is None else symbol
-        validate_theory(theory, policy, symbol)
+        try:
+            validate_theory(theory, policy, symbol)
+        except StrategyError as exc:
+            return _hold(f"Invalid theory: {exc}")
         quote = _quote(client.get_prices(symbols=symbol), symbol, now.timestamp())
         cash, held, avg = _portfolio(client.get_portfolio(), symbol)
         news = client.get_news()["news"]
@@ -102,6 +105,9 @@ def run_trader_cycle(client, llm, state, *, symbol=None, decision_time=None,
         replay = replay if replay is not None else MarketReplay(client)
         points = replay.samples(symbol, quote, theory["lookback_minutes"])
         signals = calculate_signals(points, theory["lookback_minutes"], avg, held)
+        if theory["strategy"] == "custom":
+            from custom_sma import calculate_custom
+            signals["custom"] = calculate_custom(replay.model, symbol, quote, theory)
         entry, exits = determine_triggers(theory, signals, held,
                                           require_flat_entry=require_flat_entry)
         signals.update(entry_triggered=entry, exit_triggers=exits, replay_matches_quote=True)
@@ -118,8 +124,13 @@ def run_trader_cycle(client, llm, state, *, symbol=None, decision_time=None,
         if not 0 <= reserve < 100:
             raise StrategyError("BUY reserve percent must be in [0, 100)")
         if expected == "BUY":
-            target = (num(bounds["max_buy_budget_usd"]) *
-                      (1 - reserve / 100)).quantize(Decimal("0.01"), rounding=ROUND_FLOOR)
+            buy_limit = min(
+                num(bounds["max_buy_budget_usd"]),
+                num(internal_policy["escalation_threshold_usd"])
+            )
+            target = (buy_limit * (1 - reserve / 100)).quantize(
+                Decimal("0.01"), rounding=ROUND_FLOOR
+            )
             quantity = (target / num(quote["price"])).quantize(
                 Decimal("1e-10"), rounding=ROUND_FLOOR)
             bounds["max_buy_budget_usd"] = float(target)
@@ -183,3 +194,4 @@ def run_trader_cycle(client, llm, state, *, symbol=None, decision_time=None,
     result = _remember_response(state, intent_id, reply)
     result["proposal"] = order
     return result
+
